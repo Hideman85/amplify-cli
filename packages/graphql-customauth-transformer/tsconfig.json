@@ -11,8 +11,6 @@
     {"path": "../graphql-elasticsearch-transformer"},
     {"path": "../graphql-mapping-template"},
     {"path": "../graphql-transformer-common"},
-    {"path": "../graphql-transformer-core"},
-    {"path": "../graphql-auth-transformer"},
-    {"path": "../graphql-auth-transformer/src/resources.ts"}
+    {"path": "../graphql-transformer-core"}
   ]
 }

@@ -5,6 +5,7 @@ import {ResolverResourceIDs, ResourceConstants} from 'graphql-transformer-common
 import {compoundExpression, Expression, list, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
 import {ModelDirectiveConfiguration, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
 import {AppSync, Fn} from 'cloudform-types'
+import Resolver, {PipelineConfig} from 'cloudform-types/types/appSync/resolver'
 
 export class ModelCustomAuthTransformer extends Transformer {
   constructor() {
@@ -44,9 +45,6 @@ export class ModelCustomAuthTransformer extends Transformer {
     );
   }
 
-  /**
-   * Implement the transform for an object type. Depending on which operations are to be protected
-   */
   public object = (def: ObjectTypeDefinitionNode, directive: DirectiveNode, ctx: TransformerContext): void => {
     const modelDirective = def.directives.find(dir => dir.name.value === 'model');
     if (!modelDirective) {
@@ -119,17 +117,6 @@ export class ModelCustomAuthTransformer extends Transformer {
 
   };
 
-  /**
-   * Protect get queries.
-   * If static group:
-   *  If statically authorized then allow the operation. Stop.
-   * If owner and/or dynamic group:
-   *  If the result item satisfies the owner/group authorization condition
-   *  then allow it.
-   * @param ctx The transformer context.
-   * @param resolverResourceId The logical id of the get resolver.
-   * @param rules The auth rules to apply.
-   */
   private protectGetQuery(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -137,18 +124,12 @@ export class ModelCustomAuthTransformer extends Transformer {
     parent: ObjectTypeDefinitionNode | null,
     modelConfiguration: ModelDirectiveConfiguration,
   ) {
-    const resolver = ctx.getResource(resolverResourceId);
-    if (!rule || !resolver) {
-      return;
-    } else {
-      let operationName: string = undefined;
-
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
       const authExpression = this.authorizationExpressionOnSingleObject(rule);
-
       if (authExpression) {
-        const templateParts = [print(authExpression), resolver.Properties.ResponseMappingTemplate];
-        resolver.Properties.ResponseMappingTemplate = templateParts.join('\n\n');
-        ctx.setResource(resolverResourceId, resolver);
+        // TODO: Implement
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
       }
     }
   }
@@ -158,17 +139,6 @@ export class ModelCustomAuthTransformer extends Transformer {
     return null
   }
 
-  /**
-   * Protect list queries.
-   * If static group:
-   *  If the user is statically authorized then return items and stop.
-   * If dynamic group and/or owner:
-   *  Loop through all items and find items that satisfy any of the group or
-   *  owner conditions.
-   * @param ctx The transformer context.
-   * @param resolverResourceId The logical id of the resolver to be updated in the CF template.
-   * @param rules The set of rules that apply to the operation.
-   */
   private protectListQuery(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -177,43 +147,21 @@ export class ModelCustomAuthTransformer extends Transformer {
     modelConfiguration: ModelDirectiveConfiguration,
     explicitOperationName: string = undefined,
   ) {
-    const resolver = ctx.getResource(resolverResourceId);
-    if (!rule || !resolver) {
-      return;
-    }
-    const operationName = explicitOperationName ? explicitOperationName : modelConfiguration.getName('list');
-    const authExpression = this.authorizationExpressionForListResult(rule);
-
-    if (authExpression) {
-      const templateParts = [print(authExpression), resolver.Properties.ResponseMappingTemplate];
-      resolver.Properties.ResponseMappingTemplate = templateParts.join('\n\n');
-      ctx.setResource(resolverResourceId, resolver);
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
+      const authExpression = this.authorizationExpressionForListResult(rule);
+      if (authExpression) {
+        // TODO: Implement
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+      }
     }
   }
 
-  /**
-   * Returns a VTL expression that will authorize a list of results based on a set of auth rules.
-   * @param rules The auth rules.
-   *
-   * If an itemList is specifed in @param itemList it will use this ref to filter out items in this list that are not authorized
-   */
   private authorizationExpressionForListResult(rule: Rule, itemList: string = 'ctx.result.items'): Expression {
     //  TODO: Implement resolver mapping template
     return null
   }
 
-  /**
-   * Inject auth rules for create mutations.
-   * If owner auth:
-   *  If the owner field exists in the input, validate that it against the identity.
-   *  If the owner field dne in the input, insert the identity.
-   * If group:
-   *  If the user is static group authorized allow operation no matter what.
-   *  If dynamic group and the input defines a group(s) validate it against the identity.
-   * @param ctx
-   * @param resolverResourceId
-   * @param rule
-   */
   private protectCreateMutation(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -221,37 +169,13 @@ export class ModelCustomAuthTransformer extends Transformer {
     parent: ObjectTypeDefinitionNode,
     modelConfiguration: ModelDirectiveConfiguration,
   ) {
-    const resolver = ctx.getResource(resolverResourceId);
-    if (!rule || !resolver) {
-      return;
-    } else {
-      const mutationTypeName = ctx.getMutationTypeName();
-
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
       // TODO: Implement
-      const expressions = []
-      const templateParts = [print(compoundExpression(expressions)), resolver.Properties.RequestMappingTemplate];
-      resolver.Properties.RequestMappingTemplate = templateParts.join('\n\n');
-      ctx.setResource(resolverResourceId, resolver);
+      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
     }
   }
 
-  /**
-   * Protect update and delete mutations.
-   * If Owner:
-   *  Update the conditional expression such that the update only works if
-   *  the user is the owner.
-   * If dynamic group:
-   *  Update the conditional expression such that it succeeds if the user is
-   *  dynamic group authorized. If the operation is also owner authorized this
-   *  should be joined with an OR expression.
-   * If static group:
-   *  If the user is statically authorized then allow no matter what. This can
-   *  be done by removing the conditional expression as long as static group
-   *  auth is always checked last.
-   * @param ctx The transformer context.
-   * @param resolverResourceId The logical id of the resolver in the template.
-   * @param rule The list of rules to apply.
-   */
   private protectUpdateOrDeleteMutation(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -260,30 +184,13 @@ export class ModelCustomAuthTransformer extends Transformer {
     modelConfiguration: ModelDirectiveConfiguration,
     isUpdate: boolean
   ) {
-    const resolver = ctx.getResource(resolverResourceId);
-    if (!rule || !resolver) {
-      return;
-    } else {
-      const mutationTypeName = ctx.getMutationTypeName();
-      const operationName = modelConfiguration.getName(isUpdate ? 'update' : 'delete');
-
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
       // TODO: Implement
-      const expressions = []
-      const templateParts = [print(compoundExpression(expressions)), resolver.Properties.RequestMappingTemplate];
-      resolver.Properties.RequestMappingTemplate = templateParts.join('\n\n');
-      ctx.setResource(resolverResourceId, resolver);
+      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
     }
   }
 
-  /**
-   * If we are protecting the mutation for a field level @auth directive, include
-   * the necessary if condition.
-   * @param ctx The transformer context
-   * @param resolverResourceId The resolver resource id
-   * @param rule The delete rules
-   * @param parent The parent object
-   * @param field The optional field
-   */
   private protectUpdateMutation(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -301,14 +208,6 @@ export class ModelCustomAuthTransformer extends Transformer {
     );
   }
 
-  /**
-   * If we are protecting the mutation for a field level @auth directive, include
-   * the necessary if condition.
-   * @param ctx The transformer context
-   * @param resolverResourceId The resolver resource id
-   * @param rule The delete rules
-   * @param parent The parent object
-   */
   private protectDeleteMutation(
     ctx: TransformerContext,
     resolverResourceId: string,
@@ -354,18 +253,19 @@ export class ModelCustomAuthTransformer extends Transformer {
   }
   */
 
-  private protectSyncQuery(ctx: TransformerContext, def: ObjectTypeDefinitionNode, resolverResourceID: string, rule: Rule) {
-    const resolver = ctx.getResource(resolverResourceID);
-    if (!rule || !resolver) {
-      return;
-    }
-    const operationName = resolver.Properties.FieldName;
-    // create auth expression
-    const authExpression = this.authorizationExpressionForListResult(rule);
-    if (authExpression) {
-      const templateParts = [print(authExpression), resolver.Properties.ResponseMappingTemplate];
-      resolver.Properties.ResponseMappingTemplate = templateParts.join('\n\n');
-      ctx.setResource(resolverResourceID, resolver);
+  private protectSyncQuery(
+    ctx: TransformerContext,
+    parent: ObjectTypeDefinitionNode,
+    resolverResourceId: string,
+    rule: Rule
+  ) {
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
+      const authExpression = this.authorizationExpressionForListResult(rule);
+      if (authExpression) {
+        // TODO: Implement
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+      }
     }
   }
 
@@ -454,27 +354,23 @@ export class ModelCustomAuthTransformer extends Transformer {
     const noneDS = ctx.getResource(ResourceConstants.RESOURCES.NoneDataSource);
 
     // add the rules in the subscription resolver
-    if (!rule) {
-      return;
-    } else if (level === 'public') {
-      // set the resource with no auth logic
-      ctx.setResource(resolverResourceId, resolver);
-    } else {
-      // TODO: Implement subscription authorization resolver (should be transformed into pipeline resolver)
+    if (rule) {
+      if (level === 'public') {
+        // set the resource with no auth logic
+        ctx.setResource(resolverResourceId, resolver);
+      } else {
+        // TODO: Implement subscription authorization resolver (should be transformed into pipeline resolver)
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+      }
+      // If the subscription level is set to public it adds the subscription resolver with no auth logic
+      if (!noneDS) {
+        ctx.setResource(ResourceConstants.RESOURCES.NoneDataSource, this.noneDataSource());
+      }
+      // finally map the resource to the stack
+      ctx.mapResourceToStack(parent.name.value, resolverResourceId);
     }
-    // If the subscription level is set to public it adds the subscription resolver with no auth logic
-    if (!noneDS) {
-      ctx.setResource(ResourceConstants.RESOURCES.NoneDataSource, this.noneDataSource());
-    }
-    // finally map the resource to the stack
-    ctx.mapResourceToStack(parent.name.value, resolverResourceId);
   }
 
-  /**
-   * Parse rules from the GraphQL directive @CustomAuth
-   * @param directive
-   * @private
-   */
   private getAuthRulesFromDirective(directive: DirectiveNode): AuthRule {
     const get = (s: string) => (arg: ArgumentNode) => arg.name.value === s;
     const getArg = (arg: string, dflt?: any) => {
@@ -485,9 +381,11 @@ export class ModelCustomAuthTransformer extends Transformer {
     // Get and validate the auth rules.
     const rules = getArg('rules', []) as AuthRuleDirective[];
     const mappedRules : AuthRule = {} as AuthRule;
+
     rules.forEach(rule => {
       mappedRules[rule.action.toLocaleLowerCase()] = { kind: rule.kind, allowedRoles: rule.allowedRoles };
     });
+
     return mappedRules;
   }
 
@@ -500,5 +398,76 @@ export class ModelCustomAuthTransformer extends Transformer {
       return true;
     }
     return false;
+  }
+
+  private convertToPipelineResolver(
+    ctx: TransformerContext,
+    parent: ObjectTypeDefinitionNode,
+    resourceId: string,
+    resolver: Resolver,
+    instanceID: string = '$ctx.args.id'
+  ) {
+    const before = `
+############################################
+##      [Start] Stashing needed stuff     ##
+############################################
+${instanceID ? `$util.qr($ctx.stash.put("instanceID", ${instanceID}))` : '## No instanceID set'}
+$util.qr($ctx.stash.put("userID", $ctx.identity.claims.sub))
+$util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOrganisation"]))
+############################################
+##       [End] Stashing needed stuff      ##
+############################################ 
+`
+    const after = `
+############################################
+##      [Start] Simple error check        ##
+############################################
+#if($ctx.error)
+  $util.error($ctx.error.message, $ctx.error.type, $ctx.result)
+#else
+  $util.toJson($ctx.result)
+#end
+############################################
+##       [End] Simple error check         ##
+############################################
+`
+    //  Define and assemble pipeline function
+    const pipelineFunctionID = `${resourceId}PipelineFunction`
+    const pipelineFunctionName = `PipelineFunction-${resolver.Properties.FieldName}`
+    const pipelineFunction = new AppSync.FunctionConfiguration({
+      ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
+      DataSourceName: resolver.Properties.DataSourceName,
+      RequestMappingTemplate: resolver.Properties.RequestMappingTemplate,
+      ResponseMappingTemplate: resolver.Properties.ResponseMappingTemplate,
+      Name: pipelineFunctionName,
+      FunctionVersion: RESOLVER_VERSION_ID
+    })
+
+    //  Map the new resource
+    ctx.setResource(pipelineFunctionID, pipelineFunction);
+    ctx.mapResourceToStack(parent.name.value, pipelineFunctionID);
+
+    //  Rewrite the resolver into pipeline resolver
+    resolver.Properties.DataSourceName = undefined
+    resolver.Properties.RequestMappingTemplate = before
+    resolver.Properties.ResponseMappingTemplate = after
+    resolver.Properties.Kind = 'PIPELINE'
+    resolver.Properties.PipelineConfig = new PipelineConfig({
+      Functions: [
+        Fn.Join('', [
+          Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
+          'Function1GetUserOrganisationRole'
+        ]),
+        Fn.Join('', [
+          Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
+          'Function2GetUserOrganisationRole'
+        ]),
+        pipelineFunctionName
+      ]
+    })
+
+    //  Save back the resolver
+    ctx.setResource(resourceId, resolver);
+    console.info('There is the stacks mapping', ctx.getStackMapping())
   }
 }

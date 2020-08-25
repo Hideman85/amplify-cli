@@ -1,6 +1,5 @@
 import { getDirectiveArguments } from 'graphql-transformer-core';
 import { graphqlName, toUpper, plurality } from 'graphql-transformer-common';
-import { ModelQuery, ModelMutation } from './AuthRule';
 import { DirectiveNode, ObjectTypeDefinitionNode } from 'graphql';
 
 export interface QueryNameMap {
@@ -29,6 +28,9 @@ export interface ModelDirectiveArgs {
   mutations?: MutationNameMap;
   subscriptions?: SubscriptionNameMap;
 }
+
+export type ModelQuery = 'get' | 'list';
+export type ModelMutation = 'create' | 'update' | 'delete';
 
 export type ModelDirectiveOperationType = ModelQuery | ModelMutation | 'onCreate' | 'onUpdate' | 'onDelete' | 'level';
 

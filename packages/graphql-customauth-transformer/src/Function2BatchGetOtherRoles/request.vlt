@@ -1,0 +1,63 @@
+############################################
+##   [Start] DynamoDB Batch Get Request   ##
+############################################
+#set($orgUser = $util.defaultIfNull($ctx.stash.organisationUserRole, {}))
+#set($teamID = $orgUser.teamID)
+{
+  "version": "2018-05-29",
+  "operation": "BatchGetItem",
+  "tables": {
+    ############################################
+    ##        [Start] Team role fetch         ##
+    ############################################
+    #if(!$util.isNullOrEmpty($teamID))
+      "OrganisationRole": [
+        {
+          "entityID": $util.dynamodb.toDynamoDBJson($teamID),
+          "organisationID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID)
+        }
+      ],
+    #end
+    ############################################
+    ##         [End] Team role fetch          ##
+    ############################################
+
+
+    ############################################
+    ##      [Start] Instance roles fetch      ##
+    ############################################
+    #if(!$util.isNullOrEmpty($ctx.stash.instanceID))
+      "InstanceRole": [
+        {
+          ################################################
+          ##          Getting direct user role
+          ################################################
+          "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.userID),
+          "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
+        },
+        #if(!$util.isNullOrEmpty($teamID))
+          {
+            ################################################
+            ##         Getting direct team role
+            ################################################
+            "entityID": $util.dynamodb.toDynamoDBJson($teamID),
+            "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
+          },
+        #end
+        {
+          ################################################
+          ##       Getting direct organisation role
+          ################################################
+          "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID),
+          "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
+        }
+      ]
+    #end
+    ############################################
+    ##      [End] Instance roles fetch        ##
+    ############################################
+  }
+}
+############################################
+##    [End] DynamoDB Batch Get Request    ##
+############################################
