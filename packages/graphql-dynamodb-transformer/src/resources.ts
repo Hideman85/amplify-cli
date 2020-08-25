@@ -245,7 +245,7 @@ export class ResourceFactory {
     }).deletionPolicy(deletionPolicy);
   }
 
-  private dynamoDBTableName(typeName: string): IntrinsicFunction {
+  protected dynamoDBTableName(typeName: string): IntrinsicFunction {
     return Fn.If(
       ResourceConstants.CONDITIONS.HasEnvironmentParameter,
       Fn.Join('-', [
