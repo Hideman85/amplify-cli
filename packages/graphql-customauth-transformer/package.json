@@ -1,13 +1,13 @@
 {
   "name": "graphql-customauth-transformer",
-  "version": "999.6.20.3",
-  "description": "Implements the @customauth directive for the appsync model transform.",
+  "version": "0.0.1",
+  "description": "Implements the @CustomAuth directive for the appsync model transform.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aws-amplify/amplify-cli.git",
+    "url": "https://github.com/Hideman85/amplify-cli.git",
     "directory": "packages/graphql-customauth-transformer"
   },
-  "author": "Amazon Web Services",
+  "author": "top.legal",
   "license": "Apache-2.0",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
