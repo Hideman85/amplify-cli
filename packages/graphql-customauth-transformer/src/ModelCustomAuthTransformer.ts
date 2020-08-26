@@ -2,33 +2,36 @@ import {gql, InvalidDirectiveError, Transformer, TransformerContext} from 'graph
 import {AuthRule, AuthRuleDirective, Rule} from './AuthRule'
 import {ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyped} from 'graphql'
 import {ResolverResourceIDs, ResourceConstants} from 'graphql-transformer-common'
-import {compoundExpression, Expression, list, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
+import {Expression, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
 import {ModelDirectiveConfiguration, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
 import {AppSync, Fn} from 'cloudform-types'
 import Resolver, {PipelineConfig} from 'cloudform-types/types/appSync/resolver'
+import {generateFunction as genRoleCheckFunc1, pipelineFunctionName as roleCheckFunc1Name} from './Function1GetUserOrganisationRole'
+import {generateFunction as genRoleCheckFunc2, pipelineFunctionName as roleCheckFunc2Name} from './Function2BatchGetOtherRoles'
 
 export class ModelCustomAuthTransformer extends Transformer {
+  private needPipelineFunctions: boolean = false;
+
   constructor() {
     super(
       'ModelCustomAuthTransformer',
       gql`
-        directive @CustomAuth(rules: [Rule!]!) on OBJECT
-        enum RoleKindEnum {
+        directive @CustomAuth(rules: [Rule_!]!) on OBJECT
+        enum RoleKindEnum_ {
           ORGANISATION_ROLE
           INSTANCE_ROLE
         }
-        enum OrganisationRoleEnum {
-          VIEWING_ACCESS
-          CREATING_ACCESS
-          ADMIN_ ACCESS
+        enum RoleEnum_ {
+          ORGANISATION_NO_ACCESS
+          ORGANISATION_VIEWING_ACCESS
+          ORGANISATION_CREATING_ACCESS
+          ORGANISATION_ADMIN_ACCESS
+          INSTANCE_NO_ACCESS
+          INSTANCE_VIEWING_ACCESS
+          INSTANCE_COMMENTING_ACCESS
+          INSTANCE_EDITING_ACCESS
         }
-        enum InstanceRoleEnum {
-          VIEWING_ACCESS
-          COMMENTING_ACCESS
-          EDITING_ACCESS
-        }
-        union Role = OrganisationRoleEnum | InstanceRoleEnum
-        enum ActionEnum {
+        enum ActionEnum_ {
           GET
           LIST
           CREATE
@@ -36,19 +39,31 @@ export class ModelCustomAuthTransformer extends Transformer {
           DELETE
           SUBSCRIPTION
         }
-        input Rule {
-          action: ActionEnum!
-          kind: RoleKindEnum!
-          allowedRoles: [Role!]!
+        input Rule_ {
+          action: ActionEnum_!
+          kind: RoleKindEnum_!
+          allowedRoles: [RoleEnum_!]!
         }
       `,
     );
   }
 
+  public after = (ctx: TransformerContext): void => {
+    if (this.needPipelineFunctions) {
+      //  Firstly generates the two functions in their stack named RoleChecking
+      genRoleCheckFunc1(ctx)
+      genRoleCheckFunc2(ctx)
+
+      //  Secondly add the stack RoleChecking as dependencies of others
+      // TODO: Implement
+      console.log('At the end the template looks like this', ctx.template)
+    }
+  }
+
   public object = (def: ObjectTypeDefinitionNode, directive: DirectiveNode, ctx: TransformerContext): void => {
     const modelDirective = def.directives.find(dir => dir.name.value === 'model');
     if (!modelDirective) {
-      throw new InvalidDirectiveError('Types annotated with @auth must also be annotated with @model.');
+      throw new InvalidDirectiveError('Types annotated with @CustomAuth must also be annotated with @model.');
     }
 
     // check if searchable is enabled on the type
@@ -407,6 +422,9 @@ export class ModelCustomAuthTransformer extends Transformer {
     resolver: Resolver,
     instanceID: string = '$ctx.args.id'
   ) {
+    //  Set the flag that we need pipeline functions at the end
+    this.needPipelineFunctions = true
+
     const before = `
 ############################################
 ##      [Start] Stashing needed stuff     ##
@@ -453,21 +471,12 @@ $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOr
     resolver.Properties.ResponseMappingTemplate = after
     resolver.Properties.Kind = 'PIPELINE'
     resolver.Properties.PipelineConfig = new PipelineConfig({
-      Functions: [
-        Fn.Join('', [
-          Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-          'Function1GetUserOrganisationRole'
-        ]),
-        Fn.Join('', [
-          Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-          'Function2GetUserOrganisationRole'
-        ]),
-        pipelineFunctionName
-      ]
+      Functions: [roleCheckFunc1Name, roleCheckFunc2Name, pipelineFunctionName]
     })
 
     //  Save back the resolver
     ctx.setResource(resourceId, resolver);
-    console.info('There is the stacks mapping', ctx.getStackMapping())
   }
 }
+
+export default ModelCustomAuthTransformer
