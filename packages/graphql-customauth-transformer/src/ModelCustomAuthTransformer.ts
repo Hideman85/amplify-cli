@@ -3,7 +3,7 @@ import {AuthRule, AuthRuleDirective, Rule} from './AuthRule'
 import {ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyped} from 'graphql'
 import {ResolverResourceIDs, ResourceConstants} from 'graphql-transformer-common'
 import {Expression, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
-import {ModelDirectiveConfiguration, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
+import {ModelDirectiveConfiguration, ModelDirectiveOperationType, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
 import {AppSync, Fn} from 'cloudform-types'
 import Resolver, {PipelineConfig} from 'cloudform-types/types/appSync/resolver'
 import {generateFunction as genRoleCheckFunc1, pipelineFunctionName as roleCheckFunc1Name} from './Function1GetUserOrganisationRole'
@@ -19,17 +19,19 @@ export class ModelCustomAuthTransformer extends Transformer {
         directive @CustomAuth(rules: [Rule_!]!) on OBJECT
         enum RoleKindEnum_ {
           ORGANISATION_ROLE
+          ORGANISATION_MEMBER
+          ORGANISATION_ADMIN
           INSTANCE_ROLE
         }
         enum RoleEnum_ {
-          ORGANISATION_NO_ACCESS
-          ORGANISATION_VIEWING_ACCESS
-          ORGANISATION_CREATING_ACCESS
-          ORGANISATION_ADMIN_ACCESS
-          INSTANCE_NO_ACCESS
-          INSTANCE_VIEWING_ACCESS
-          INSTANCE_COMMENTING_ACCESS
-          INSTANCE_EDITING_ACCESS
+          # Roles both Instance & Organisation
+          VIEWING_ACCESS
+          ADMIN_ACCESS
+          # Roles for Instance only
+          COMMENTING_ACCESS
+          EDITING_ACCESS
+          # Role for Organisation only
+          CREATING_ACCESS
         }
         enum ActionEnum_ {
           GET
@@ -40,9 +42,10 @@ export class ModelCustomAuthTransformer extends Transformer {
           SUBSCRIPTION
         }
         input Rule_ {
-          action: ActionEnum_!
+          actions: [ActionEnum_!]!
           kind: RoleKindEnum_!
           allowedRoles: [RoleEnum_!]!
+          instanceField: String
         }
       `,
     );
@@ -76,34 +79,14 @@ export class ModelCustomAuthTransformer extends Transformer {
     const modelConfiguration = new ModelDirectiveConfiguration(modelDirective, def);
 
     // For each operation evaluate the rules and apply the changes to the relevant resolver.
-    this.protectCreateMutation(
+    ['Get', 'Create', 'Update', 'Delete'].forEach(action => this.protectSingleItemAction(
       ctx,
-      ResolverResourceIDs.DynamoDBCreateResolverResourceID(def.name.value),
-      rules.create,
+      ResolverResourceIDs[`DynamoDB${action}ResolverResourceID`](def.name.value),
+      rules[action.toLowerCase()],
       def,
       modelConfiguration,
-    );
-    this.protectUpdateMutation(
-      ctx,
-      ResolverResourceIDs.DynamoDBUpdateResolverResourceID(def.name.value),
-      rules.update,
-      def,
-      modelConfiguration,
-    );
-    this.protectDeleteMutation(
-      ctx,
-      ResolverResourceIDs.DynamoDBDeleteResolverResourceID(def.name.value),
-      rules.delete,
-      def,
-      modelConfiguration,
-    );
-    this.protectGetQuery(
-      ctx,
-      ResolverResourceIDs.DynamoDBGetResolverResourceID(def.name.value),
-      rules.get,
-      def,
-      modelConfiguration
-    );
+    ));
+
     this.protectListQuery(
       ctx,
       ResolverResourceIDs.DynamoDBListResolverResourceID(def.name.value),
@@ -125,14 +108,14 @@ export class ModelCustomAuthTransformer extends Transformer {
 
     // Check if subscriptions is enabled
     if (modelConfiguration.getName('level') !== 'off') {
-      this.protectOnCreateSubscription(ctx, rules.subscription, def, modelConfiguration);
-      this.protectOnUpdateSubscription(ctx, rules.subscription, def, modelConfiguration);
-      this.protectOnDeleteSubscription(ctx, rules.subscription, def, modelConfiguration);
+      this.protectSubscription('onCreate', ctx, rules.subscription, def, modelConfiguration);
+      this.protectSubscription('onUpdate', ctx, rules.subscription, def, modelConfiguration);
+      this.protectSubscription('onDelete', ctx, rules.subscription, def, modelConfiguration);
     }
 
   };
 
-  private protectGetQuery(
+  private protectSingleItemAction(
     ctx: TransformerContext,
     resolverResourceId: string,
     rule: Rule,
@@ -141,17 +124,65 @@ export class ModelCustomAuthTransformer extends Transformer {
   ) {
     const resolver = ctx.getResource(resolverResourceId) as Resolver;
     if (rule && resolver) {
-      const authExpression = this.authorizationExpressionOnSingleObject(rule);
-      if (authExpression) {
-        // TODO: Implement
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
-      }
+      //  Adding role check to the current request template
+      const roleCheck = this.genRoleCheckTemplate(rule, parent.name.value)
+      resolver.Properties.RequestMappingTemplate = roleCheck + resolver.Properties.RequestMappingTemplate
+
+      //  Converting into pipeline resolver
+      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
     }
   }
 
-  private authorizationExpressionOnSingleObject(rule: Rule, objectPath: string = 'ctx.result'): Expression {
-    //  TODO: Implement resolver mapping template
-    return null
+  private genRoleCheckTemplate(rule: Rule, modelName: string) {
+    if (rule.kind === 'INSTANCE_ROLE') {
+      return `
+############################################
+##          [Start] Role check            ##
+############################################
+#set($allowedRoles = ${JSON.stringify(rule.allowedRoles)})
+#set($role = null)
+
+##  Finding the role to check
+#if($ctx.stash.instanceUserRole)
+  #set($role = $ctx.stash.instanceUserRole.role)
+#elif($ctx.stash.instanceTeamRole)
+  #set($role = $ctx.stash.instanceTeamRole.role)
+#elif($ctx.stash.instanceOrganisationRole)
+  #set($role = $ctx.stash.instanceOrganisationRole.role)
+#end
+
+##  Checking the role
+#if(!$allowedRoles.contains($role))
+  $util.unauthorized()
+#end
+############################################
+##           [End] Role check             ##
+############################################
+`
+    } else {
+      return `
+############################################
+##          [Start] Role check            ##
+############################################
+#set($allowedRoles = ${JSON.stringify(rule.allowedRoles)})
+#set($role = null)
+
+##  Finding the role to check
+#if($ctx.stash.organisationUserRole)
+  #set($role = $ctx.stash.organisationUserRole.${modelName.toLowerCase()}Role)
+#elif($ctx.stash.organisationTeamRole)
+  #set($role = $ctx.stash.organisationTeamRole.${modelName.toLowerCase()}Role)
+#end
+
+##  Checking the role
+#if(!$allowedRoles.contains($role))
+  $util.unauthorized()
+#end
+############################################
+##           [End] Role check             ##
+############################################
+`
+    }
   }
 
   private protectListQuery(
@@ -167,7 +198,7 @@ export class ModelCustomAuthTransformer extends Transformer {
       const authExpression = this.authorizationExpressionForListResult(rule);
       if (authExpression) {
         // TODO: Implement
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
       }
     }
   }
@@ -175,69 +206,6 @@ export class ModelCustomAuthTransformer extends Transformer {
   private authorizationExpressionForListResult(rule: Rule, itemList: string = 'ctx.result.items'): Expression {
     //  TODO: Implement resolver mapping template
     return null
-  }
-
-  private protectCreateMutation(
-    ctx: TransformerContext,
-    resolverResourceId: string,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration,
-  ) {
-    const resolver = ctx.getResource(resolverResourceId) as Resolver;
-    if (rule && resolver) {
-      // TODO: Implement
-      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
-    }
-  }
-
-  private protectUpdateOrDeleteMutation(
-    ctx: TransformerContext,
-    resolverResourceId: string,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration,
-    isUpdate: boolean
-  ) {
-    const resolver = ctx.getResource(resolverResourceId) as Resolver;
-    if (rule && resolver) {
-      // TODO: Implement
-      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
-    }
-  }
-
-  private protectUpdateMutation(
-    ctx: TransformerContext,
-    resolverResourceId: string,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration
-  ) {
-    return this.protectUpdateOrDeleteMutation(
-      ctx,
-      resolverResourceId,
-      rule,
-      parent,
-      modelConfiguration,
-      true
-    );
-  }
-
-  private protectDeleteMutation(
-    ctx: TransformerContext,
-    resolverResourceId: string,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration
-  ) {
-    return this.protectUpdateOrDeleteMutation(
-      ctx,
-      resolverResourceId,
-      rule,
-      parent,
-      modelConfiguration,
-      false
-    );
   }
 
   /*
@@ -279,55 +247,24 @@ export class ModelCustomAuthTransformer extends Transformer {
       const authExpression = this.authorizationExpressionForListResult(rule);
       if (authExpression) {
         // TODO: Implement
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
       }
     }
   }
 
-  // OnCreate Subscription
-  private protectOnCreateSubscription(
+  // Subscription
+  private protectSubscription(
+    subscriptionType: ModelDirectiveOperationType,
     ctx: TransformerContext,
     rule: Rule,
     parent: ObjectTypeDefinitionNode,
     modelConfiguration: ModelDirectiveConfiguration,
   ) {
-    const names = modelConfiguration.getNames('onCreate');
+    const names = modelConfiguration.getNames(subscriptionType);
     const level = modelConfiguration.getName('level') as ModelSubscriptionLevel;
     if (names) {
       names.forEach(name => {
-        this.addSubscriptionResolvers(ctx, rule, parent, level, name);
-      });
-    }
-  }
-
-  // OnUpdate Subscription
-  private protectOnUpdateSubscription(
-    ctx: TransformerContext,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration,
-  ) {
-    const names = modelConfiguration.getNames('onUpdate');
-    const level = modelConfiguration.getName('level') as ModelSubscriptionLevel;
-    if (names) {
-      names.forEach(name => {
-        this.addSubscriptionResolvers(ctx, rule, parent, level, name);
-      });
-    }
-  }
-
-  // OnDelete Subscription
-  private protectOnDeleteSubscription(
-    ctx: TransformerContext,
-    rule: Rule,
-    parent: ObjectTypeDefinitionNode,
-    modelConfiguration: ModelDirectiveConfiguration,
-  ) {
-    const names = modelConfiguration.getNames('onDelete');
-    const level = modelConfiguration.getName('level') as ModelSubscriptionLevel;
-    if (names) {
-      names.forEach(name => {
-        this.addSubscriptionResolvers(ctx, rule, parent, level, name);
+        this.addSubscriptionResolvers(subscriptionType, ctx, rule, parent, level, name);
       });
     }
   }
@@ -357,6 +294,7 @@ export class ModelCustomAuthTransformer extends Transformer {
 
   // adds subscription resolvers (request / response) based on the operation provided
   private addSubscriptionResolvers(
+    subscriptionType: ModelDirectiveOperationType,
     ctx: TransformerContext,
     rule: Rule,
     parent: ObjectTypeDefinitionNode,
@@ -375,7 +313,7 @@ export class ModelCustomAuthTransformer extends Transformer {
         ctx.setResource(resolverResourceId, resolver);
       } else {
         // TODO: Implement subscription authorization resolver (should be transformed into pipeline resolver)
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver)
+        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
       }
       // If the subscription level is set to public it adds the subscription resolver with no auth logic
       if (!noneDS) {
@@ -398,7 +336,9 @@ export class ModelCustomAuthTransformer extends Transformer {
     const mappedRules : AuthRule = {} as AuthRule;
 
     rules.forEach(rule => {
-      mappedRules[rule.action.toLocaleLowerCase()] = { kind: rule.kind, allowedRoles: rule.allowedRoles };
+      rule.actions.forEach(action => {
+        mappedRules[action.toLocaleLowerCase()] = { kind: rule.kind, allowedRoles: rule.allowedRoles, instanceField: rule.instanceField };
+      })
     });
 
     return mappedRules;
@@ -420,7 +360,7 @@ export class ModelCustomAuthTransformer extends Transformer {
     parent: ObjectTypeDefinitionNode,
     resourceId: string,
     resolver: Resolver,
-    instanceID: string = '$ctx.args.id'
+    instanceID: string = 'id'
   ) {
     //  Set the flag that we need pipeline functions at the end
     this.needPipelineFunctions = true
@@ -429,7 +369,7 @@ export class ModelCustomAuthTransformer extends Transformer {
 ############################################
 ##      [Start] Stashing needed stuff     ##
 ############################################
-${instanceID ? `$util.qr($ctx.stash.put("instanceID", ${instanceID}))` : '## No instanceID set'}
+${instanceID ? `$util.qr($ctx.stash.put("instanceID", $ctx.args.input.${instanceID}))` : '## No instanceID set'}
 $util.qr($ctx.stash.put("userID", $ctx.identity.claims.sub))
 $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOrganisation"]))
 ############################################

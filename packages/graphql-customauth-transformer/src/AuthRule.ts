@@ -1,18 +1,20 @@
 import Maybe from 'graphql/tsutils/Maybe'
 
-export type RoleKindEnum = 'ORGANISATION_ROLE' | 'INSTANCE_ROLE'
-export type OrganisationRoleEnum = 'VIEWING_ACCESS' | 'CREATING_ACCESS' | 'ADMIN_ACCESS'
-export type InstanceRoleEnum = 'VIEWING_ACCESS' | 'COMMENTING_ACCESS' | 'EDITING_ACCESS'
-export type Role = OrganisationRoleEnum | InstanceRoleEnum
+export type RoleKindEnum = 'ORGANISATION_ROLE' | 'ORGANISATION_MEMBER' | 'ORGANISATION_ADMIN' | 'INSTANCE_ROLE'
+export type Role = 'VIEWING_ACCESS'  | 'ADMIN_ACCESS' // For both
+  | 'COMMENTING_ACCESS' | 'EDITING_ACCESS' // For Instance only
+  | 'CREATING_ACCESS' // For Organisation only
 export type ActionEnum = 'GET' | 'LIST' | 'CREATE' | 'UPDATE' | 'DELETE' | 'SUBSCRIPTION'
 export interface AuthRuleDirective {
-  action: ActionEnum;
+  actions: ActionEnum[];
   kind: RoleKindEnum;
   allowedRoles: Role[];
+  instanceField: string;
 }
 export interface Rule {
   kind: RoleKindEnum;
   allowedRoles: Role[];
+  instanceField: Maybe<string>;
 }
 export interface AuthRule {
   get: Maybe<Rule>;
