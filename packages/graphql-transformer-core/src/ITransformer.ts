@@ -13,6 +13,7 @@ import {
   TypeDefinitionNode,
 } from 'graphql';
 import { TransformerContext } from './TransformerContext';
+import { CloudFormation, Template } from 'cloudform-types';
 
 export interface ITransformer {
   name: string;
@@ -32,6 +33,11 @@ export interface ITransformer {
    * Finalizers are called in reverse order as they are declared.
    */
   after?: (acc: TransformerContext) => void;
+
+  /**
+   * A transformer call per each nested stacks created after transformation.
+   */
+  stack?: (stackName: string, stackResource: CloudFormation.Stack, stackTemplate: Template) => void;
 
   /**
    * A transformer implements a single function per location that its directive can be applied.

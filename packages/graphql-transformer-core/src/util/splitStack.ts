@@ -37,6 +37,7 @@ export interface SplitStackOptions {
     deploymentBucketParameterName: string;
     deploymentKeyParameterName: string;
   };
+  stackTransformer?: (stackName: string, stackResource: CloudFormation.Stack, stackTemplate: Template) => void
 }
 export default function splitStack(opts: SplitStackOptions): NestedStacks {
   const stack = opts.stack;
@@ -46,6 +47,7 @@ export default function splitStack(opts: SplitStackOptions): NestedStacks {
   const defaultParameterDefinitions = opts.defaultParameterDefinitions || {};
   const defaultDependencies = opts.defaultDependencies || [];
   const importExportPrefix = opts.importExportPrefix;
+  const stackTransformer = opts.stackTransformer || (() => null);
 
   /**
    * Returns a map where the keys are the Resource/Output ids and the values are
@@ -138,6 +140,7 @@ export default function splitStack(opts: SplitStackOptions): NestedStacks {
     // The root stack exposes all parameters at the top level.
     templateMap[rootStackName].Parameters = template.Parameters;
     templateMap[rootStackName].Conditions = template.Conditions;
+
     return templateMap;
   }
 
@@ -312,6 +315,9 @@ export default function splitStack(opts: SplitStackOptions): NestedStacks {
           stackName + '.json',
         ]),
       }).dependsOn([...defaultDependencies, ...dependsOnStacks]);
+
+      stackTransformer(stackName, stackResource, stacks[stackName]);
+
       root.Resources[stackName] = stackResource;
     }
     return root;

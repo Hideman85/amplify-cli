@@ -304,7 +304,13 @@ export class GraphQLTransform {
     // Format the context into many stacks.
     this.updateContextForStackMappingOverrides(context);
     const formatter = new TransformFormatter();
-    return formatter.format(context);
+    return formatter.format(context, (stackName, stackResource, stackTemplate) => {
+      for (const transformer of this.transformers) {
+        if (isFunction(transformer.stack)) {
+          transformer.stack(stackName, stackResource, stackTemplate);
+        }
+      }
+    });
   }
 
   private updateContextForStackMappingOverrides(context: TransformerContext) {

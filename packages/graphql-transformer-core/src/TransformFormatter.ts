@@ -1,5 +1,5 @@
 import { TransformerContext } from './TransformerContext';
-import { Fn, StringParameter } from 'cloudform-types';
+import { Fn, StringParameter, CloudFormation, Template } from 'cloudform-types';
 import Resource from 'cloudform-types/types/resource';
 import { makeOperationType, makeSchema } from 'graphql-transformer-common';
 import { ObjectTypeDefinitionNode, print } from 'graphql';
@@ -26,7 +26,7 @@ export class TransformFormatter {
    * @param ctx the transformer context.
    * Returns all the deployment resources for the transformation.
    */
-  public format(ctx: TransformerContext): DeploymentResources {
+  public format(ctx: TransformerContext, stackTransformer?: (stackName: string, stackResource: CloudFormation.Stack, stackTemplate: Template) => void): DeploymentResources {
     ctx.mergeConditions(this.schemaResourceUtil.makeEnvironmentConditions());
     const resolversFunctionsAndSchema = this.collectResolversFunctionsAndSchema(ctx);
     const defaultDependencies = [ResourceConstants.RESOURCES.GraphQLSchemaLogicalID];
@@ -50,6 +50,7 @@ export class TransformFormatter {
       },
       importExportPrefix: Fn.Ref(ResourceConstants.PARAMETERS.AppSyncApiId),
       defaultDependencies,
+      stackTransformer
     });
     return {
       ...nestedStacks,
