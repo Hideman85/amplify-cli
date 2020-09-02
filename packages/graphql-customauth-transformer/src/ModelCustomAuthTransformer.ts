@@ -66,15 +66,17 @@ export class ModelCustomAuthTransformer extends Transformer {
       if (stackName === 'RoleChecking') {
         //  Exports needed variables
         [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
-          stackTemplate.Outputs[output] = { Value: Fn.Ref(output) };
+          stackTemplate.Outputs[`${output}Output`] = {
+            Value: Fn.GetAtt(output, 'FunctionId')
+          };
         });
       } else {
         //  Add parameters
         [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
-          stackTemplate.Parameters[output] = { Type: 'String' };
-          stackResource.Properties.Parameters[output] = Fn.GetAtt(
+          stackTemplate.Parameters[`${output}Param`] = { Type: 'String' };
+          stackResource.Properties.Parameters[`${output}Param`] = Fn.GetAtt(
             'RoleChecking',
-            `Outputs.${output}`
+            `Outputs.${output}Output`
           );
         });
       }
@@ -437,14 +439,13 @@ $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOr
     ctx.mapResourceToStack(parent.name.value, pipelineFunctionID);
 
     //  Rewrite the resolver into pipeline resolver
-    resolver.Properties.DataSourceName = undefined
     resolver.Properties.RequestMappingTemplate = before
     resolver.Properties.ResponseMappingTemplate = after
     resolver.Properties.Kind = 'PIPELINE'
     resolver.Properties.PipelineConfig = new PipelineConfig({
       Functions: [
-        Fn.Ref(roleCheckFunc1Name),
-        Fn.Ref(roleCheckFunc2Name),
+        Fn.Ref(`${roleCheckFunc1Name}Param`),
+        Fn.Ref(`${roleCheckFunc2Name}Param`),
         Fn.GetAtt(pipelineFunctionID, 'FunctionId')
       ]
     })
