@@ -7,7 +7,7 @@ export const pipelineFunctionName = 'Function1GetUserOrganisationRole'
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-    DataSourceName: 'resolver.Properties.DataSourceName',
+    DataSourceName: 'NONE',
     RequestMappingTemplate: `
 ############################################
 ##      [Start] DynamoDB Get Request      ##

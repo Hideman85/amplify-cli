@@ -4,10 +4,11 @@ import {ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyp
 import {ResolverResourceIDs, ResourceConstants} from 'graphql-transformer-common'
 import {Expression, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
 import {ModelDirectiveConfiguration, ModelDirectiveOperationType, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
-import {AppSync, Fn} from 'cloudform-types'
+import {AppSync, Fn, CloudFormation, Template} from 'cloudform-types'
 import Resolver, {PipelineConfig} from 'cloudform-types/types/appSync/resolver'
 import {generateFunction as genRoleCheckFunc1, pipelineFunctionName as roleCheckFunc1Name} from './Function1GetUserOrganisationRole'
 import {generateFunction as genRoleCheckFunc2, pipelineFunctionName as roleCheckFunc2Name} from './Function2BatchGetOtherRoles'
+import {type} from 'os'
 
 export class ModelCustomAuthTransformer extends Transformer {
   private needPipelineFunctions: boolean = false;
@@ -56,10 +57,27 @@ export class ModelCustomAuthTransformer extends Transformer {
       //  Firstly generates the two functions in their stack named RoleChecking
       genRoleCheckFunc1(ctx)
       genRoleCheckFunc2(ctx)
+    }
+  }
 
-      //  Secondly add the stack RoleChecking as dependencies of others
-      // TODO: Implement
-      console.log('At the end the template looks like this', ctx.template)
+
+  public stack = (stackName: string, stackResource: CloudFormation.Stack, stackTemplate: Template) => {
+    if (this.needPipelineFunctions) {
+      if (stackName === 'RoleChecking') {
+        //  Exports needed variables
+        [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
+          stackTemplate.Outputs[output] = { Value: Fn.Ref(output) };
+        });
+      } else {
+        //  Add parameters
+        [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
+          stackTemplate.Parameters[output] = { Type: 'String' };
+          stackResource.Properties.Parameters[output] = Fn.GetAtt(
+            'RoleChecking',
+            `Outputs.${output}`
+          );
+        });
+      }
     }
   }
 
@@ -159,7 +177,7 @@ export class ModelCustomAuthTransformer extends Transformer {
 ##           [End] Role check             ##
 ############################################
 `
-    } else {
+    } else if (rule.kind === 'ORGANISATION_ROLE') {
       return `
 ############################################
 ##          [Start] Role check            ##
@@ -176,6 +194,20 @@ export class ModelCustomAuthTransformer extends Transformer {
 
 ##  Checking the role
 #if(!$allowedRoles.contains($role))
+  $util.unauthorized()
+#end
+############################################
+##           [End] Role check             ##
+############################################
+`
+    } else {
+      return `
+############################################
+##          [Start] Role check            ##
+############################################
+
+##  Checking the role
+#if(!$ctx.stash.organisationUserRole ${rule.kind === 'ORGANISATION_ADMIN' ? `|| $ctx.stash.organisationUserRole.team != '_admin'` : ''})
   $util.unauthorized()
 #end
 ############################################
@@ -370,7 +402,7 @@ export class ModelCustomAuthTransformer extends Transformer {
 ##      [Start] Stashing needed stuff     ##
 ############################################
 ${instanceID ? `$util.qr($ctx.stash.put("instanceID", $ctx.args.input.${instanceID}))` : '## No instanceID set'}
-$util.qr($ctx.stash.put("userID", $ctx.identity.claims.sub))
+$util.qr($ctx.stash.put("userID", $ctx.identity.sub))
 $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOrganisation"]))
 ############################################
 ##       [End] Stashing needed stuff      ##
@@ -391,13 +423,12 @@ $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOr
 `
     //  Define and assemble pipeline function
     const pipelineFunctionID = `${resourceId}PipelineFunction`
-    const pipelineFunctionName = `PipelineFunction-${resolver.Properties.FieldName}`
     const pipelineFunction = new AppSync.FunctionConfiguration({
       ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
       DataSourceName: resolver.Properties.DataSourceName,
       RequestMappingTemplate: resolver.Properties.RequestMappingTemplate,
       ResponseMappingTemplate: resolver.Properties.ResponseMappingTemplate,
-      Name: pipelineFunctionName,
+      Name: pipelineFunctionID,
       FunctionVersion: RESOLVER_VERSION_ID
     })
 
@@ -411,8 +442,20 @@ $util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOr
     resolver.Properties.ResponseMappingTemplate = after
     resolver.Properties.Kind = 'PIPELINE'
     resolver.Properties.PipelineConfig = new PipelineConfig({
-      Functions: [roleCheckFunc1Name, roleCheckFunc2Name, pipelineFunctionName]
+      Functions: [
+        Fn.Ref(roleCheckFunc1Name),
+        Fn.Ref(roleCheckFunc2Name),
+        Fn.GetAtt(pipelineFunctionID, 'FunctionId')
+      ]
     })
+
+    //  The resolver need to wait the creation of the pipeline function
+    if (typeof resolver.DependsOn === 'string') {
+      resolver.DependsOn = [resolver.DependsOn]
+    } else if (!Array.isArray(resolver.DependsOn)) {
+      resolver.DependsOn = []
+    }
+    resolver.DependsOn.push(pipelineFunctionID)
 
     //  Save back the resolver
     ctx.setResource(resourceId, resolver);
