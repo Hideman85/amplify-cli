@@ -1,13 +1,15 @@
-import {TransformerContext} from 'graphql-transformer-core'
-import {AppSync, Fn} from 'cloudform-types'
-import {ResourceConstants} from 'graphql-transformer-common'
-import {RESOLVER_VERSION_ID} from 'graphql-mapping-template'
+import { TransformerContext } from 'graphql-transformer-core';
+import { AppSync, Fn } from 'cloudform-types';
+import { ResourceConstants } from 'graphql-transformer-common';
+import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 
-export const pipelineFunctionName = 'Function2BatchGetOtherRoles'
+// TODO: Replace -tylqaqhldbbazmqji7cehkrqhm-dev by the way to get the GraphQL API ID and env from a mapping template
+
+export const pipelineFunctionName = 'FunctionBatchGetOtherRoles';
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-    DataSourceName: 'NONE',
+    DataSourceName: Fn.GetAtt('AllTablesRoleCheckingDataSource', 'Name'),
     RequestMappingTemplate: `
 ############################################
 ##   [Start] DynamoDB Batch Get Request   ##
@@ -22,12 +24,14 @@ export const generateFunction = (ctx: TransformerContext) => {
     ##        [Start] Team role fetch         ##
     ############################################
     #if(!$util.isNullOrEmpty($teamID))
-      "OrganisationRole": [
-        {
-          "entityID": $util.dynamodb.toDynamoDBJson($teamID),
-          "organisationID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID)
-        }
-      ],
+      "OrganisationRole-tylqaqhldbbazmqji7cehkrqhm-dev": {
+        "keys": [
+          {
+            "entityID": $util.dynamodb.toDynamoDBJson($teamID),
+            "organisationID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID)
+          }
+        ]
+      },
     #end
     ############################################
     ##         [End] Team role fetch          ##
@@ -38,31 +42,33 @@ export const generateFunction = (ctx: TransformerContext) => {
     ##      [Start] Instance roles fetch      ##
     ############################################
     #if(!$util.isNullOrEmpty($ctx.stash.instanceID))
-      "InstanceRole": [
-        {
-          ################################################
-          ##          Getting direct user role
-          ################################################
-          "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.userID),
-          "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
-        },
-        #if(!$util.isNullOrEmpty($teamID))
+      "InstanceRole-tylqaqhldbbazmqji7cehkrqhm-dev": {
+        "keys": [
           {
             ################################################
-            ##         Getting direct team role
+            ##          Getting direct user role
             ################################################
-            "entityID": $util.dynamodb.toDynamoDBJson($teamID),
+            "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.userID),
             "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
           },
-        #end
-        {
-          ################################################
-          ##       Getting direct organisation role
-          ################################################
-          "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID),
-          "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
-        }
-      ]
+          #if(!$util.isNullOrEmpty($teamID))
+            {
+              ################################################
+              ##         Getting direct team role
+              ################################################
+              "entityID": $util.dynamodb.toDynamoDBJson($teamID),
+              "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
+            },
+          #end
+          {
+            ################################################
+            ##       Getting direct organisation role
+            ################################################
+            "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID),
+            "instanceID": $util.dynamodb.toDynamoDBJson($ctx.stash.instanceID)
+          }
+        ]
+      }
     #end
     ############################################
     ##      [End] Instance roles fetch        ##
@@ -95,7 +101,7 @@ export const generateFunction = (ctx: TransformerContext) => {
       #if($role)
         #if($role.entityID == $ctx.stash.organisationID)
           $util.qr($ctx.stash.put("instanceOrganisationRole", $role))
-        #elif($role.entityID == $ctx.stash.userID)
+        #elseif($role.entityID == $ctx.stash.userID)
           $util.qr($ctx.stash.put("instanceUserRole", $role))
         #else ## The team role
           $util.qr($ctx.stash.put("instanceTeamRole", $role))
@@ -107,11 +113,13 @@ export const generateFunction = (ctx: TransformerContext) => {
 ############################################
 ##        [End] Simple error check        ##
 ############################################
+##  DON'T REMOVE CAUSING EMPTY RESPONSE ERROR
+{}
 `,
     Name: pipelineFunctionName,
-    FunctionVersion: RESOLVER_VERSION_ID
-  })
+    FunctionVersion: RESOLVER_VERSION_ID,
+  });
 
   ctx.setResource(pipelineFunctionName, pipelineFunction);
   ctx.mapResourceToStack('RoleChecking', pipelineFunctionName);
-}
+};

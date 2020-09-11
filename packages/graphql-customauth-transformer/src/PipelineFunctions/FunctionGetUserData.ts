@@ -1,13 +1,13 @@
-import {TransformerContext} from 'graphql-transformer-core'
-import {AppSync, Fn} from 'cloudform-types'
-import {ResourceConstants} from 'graphql-transformer-common'
-import {RESOLVER_VERSION_ID} from 'graphql-mapping-template'
+import { TransformerContext } from 'graphql-transformer-core';
+import { AppSync, Fn } from 'cloudform-types';
+import { ResourceConstants } from 'graphql-transformer-common';
+import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 
-export const pipelineFunctionName = 'Function1GetUserOrganisationRole'
+export const pipelineFunctionName = 'FunctionGetUserData'
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-    DataSourceName: 'NONE',
+    DataSourceName: Fn.GetAtt('UserRoleCheckingDataSource', 'Name'),
     RequestMappingTemplate: `
 ############################################
 ##      [Start] DynamoDB Get Request      ##
@@ -16,8 +16,7 @@ export const generateFunction = (ctx: TransformerContext) => {
   "version": "${RESOLVER_VERSION_ID}",
   "operation": "GetItem",
   "key": {
-    "entityID": $util.dynamodb.toDynamoDBJson($ctx.stash.userID),
-    "organisationID": $util.dynamodb.toDynamoDBJson($ctx.stash.organisationID)
+    "id": $util.dynamodb.toDynamoDBJson($ctx.stash.userID)
   }
 }
 ############################################
@@ -31,11 +30,14 @@ export const generateFunction = (ctx: TransformerContext) => {
 #if($ctx.error)
   $util.error($ctx.error.message, $ctx.error.type, $ctx.result)
 #else
-  $util.qr($ctx.stash.put("organisationUserRole", $ctx.result))
+  $util.qr($ctx.stash.put("userData", $ctx.result))
+  $util.qr($ctx.stash.put("organisationID", $ctx.stash.userData.currentOrganisationID))
 #end
 ############################################
 ##       [End] Simple error check         ##
 ############################################
+##  DON'T REMOVE CAUSING EMPTY RESPONSE ERROR
+{}
 `,
     Name: pipelineFunctionName,
     FunctionVersion: RESOLVER_VERSION_ID

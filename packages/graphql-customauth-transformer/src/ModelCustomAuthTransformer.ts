@@ -1,14 +1,46 @@
-import {gql, InvalidDirectiveError, Transformer, TransformerContext} from 'graphql-transformer-core'
-import {AuthRule, AuthRuleDirective, Rule} from './AuthRule'
-import {ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyped} from 'graphql'
-import {ResolverResourceIDs, ResourceConstants} from 'graphql-transformer-common'
-import {Expression, print, raw, RESOLVER_VERSION_ID} from 'graphql-mapping-template'
-import {ModelDirectiveConfiguration, ModelDirectiveOperationType, ModelSubscriptionLevel} from './ModelDirectiveConfiguration'
-import {AppSync, Fn, CloudFormation, Template} from 'cloudform-types'
-import Resolver, {PipelineConfig} from 'cloudform-types/types/appSync/resolver'
-import {generateFunction as genRoleCheckFunc1, pipelineFunctionName as roleCheckFunc1Name} from './Function1GetUserOrganisationRole'
-import {generateFunction as genRoleCheckFunc2, pipelineFunctionName as roleCheckFunc2Name} from './Function2BatchGetOtherRoles'
-import {type} from 'os'
+//  TS Types imports
+import Maybe from 'graphql/tsutils/Maybe';
+import { ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyped } from 'graphql';
+import { AuthRule, AuthRuleDirective, ListConfig, ListRule, Rule } from './AuthRule';
+import { ModelDirectiveConfiguration, ModelDirectiveOperationType, ModelSubscriptionLevel } from './ModelDirectiveConfiguration';
+
+//  Libs imports
+import { gql, InvalidDirectiveError, Transformer, TransformerContext } from 'graphql-transformer-core';
+import { ResolverResourceIDs, ResourceConstants } from 'graphql-transformer-common';
+import { print, raw, RESOLVER_VERSION_ID } from 'graphql-mapping-template';
+import { AppSync, CloudFormation, Fn, Template } from 'cloudform-types';
+import Resolver from 'cloudform-types/types/appSync/resolver';
+
+//  Pipeline functions imports
+import { generateFunction as genGetUserData, pipelineFunctionName as getUserDataFunc } from './PipelineFunctions/FunctionGetUserData';
+import {
+  generateFunction as genGetUserOrganisationRole,
+  pipelineFunctionName as getUserOrganisationRoleFunc,
+} from './PipelineFunctions/FunctionGetUserOrganisationRole';
+import {
+  generateFunction as genGetOtherRoles,
+  pipelineFunctionName as getOtherRolesFunc,
+} from './PipelineFunctions/FunctionBatchGetOtherRoles';
+import {
+  generateFunction as genInstanceLookup,
+  pipelineFunctionName as instanceLookupFunc,
+} from './PipelineFunctions/FunctionInstanceRolesLookup';
+import {
+  generateFunction as genInstanceBatchGet,
+  pipelineFunctionName as instanceBatchGetFunc,
+} from './PipelineFunctions/FunctionInstanceBatchGet';
+
+//  All tables DataSource
+import genAllTableDataSource from './GenerateAllTablesDataSource';
+
+//  Resolver converters
+import { converter as convertListToInstanceRoleLookup } from './ResolverTransformers/ListByInstanceRoleLookup';
+import { converter as convertListToOrganisationIDLookup } from './ResolverTransformers/ListByOrganisationID';
+import { converter as convertWithRoleChecking } from './ResolverTransformers/SingleActionRoleCheck';
+
+//  Mapping template generator
+import genRoleCheckMappingTemplate from './GenRoleCheckMappingTemplate';
+
 
 export class ModelCustomAuthTransformer extends Transformer {
   private needPipelineFunctions: boolean = false;
@@ -17,7 +49,7 @@ export class ModelCustomAuthTransformer extends Transformer {
     super(
       'ModelCustomAuthTransformer',
       gql`
-        directive @CustomAuth(rules: [Rule_!]!) on OBJECT
+        directive @CustomAuth(rules: [Rule_!]!, listConfig: ListConfig_) on OBJECT
         enum RoleKindEnum_ {
           ORGANISATION_ROLE
           ORGANISATION_MEMBER
@@ -48,40 +80,57 @@ export class ModelCustomAuthTransformer extends Transformer {
           allowedRoles: [RoleEnum_!]!
           instanceField: String
         }
+        enum ListConfigKind_ {
+          LIST_BY_INSTANCE_ROLE_LOOKUP
+          LIST_BY_ORGANISATION_ID
+        }
+        input ListConfig_ {
+          kind: ListConfigKind_!
+          # Attributes for kind = LIST_BY_ORGANISATION_ID
+          listIndex: String
+          organisationID: String
+        }
       `,
     );
   }
 
   public after = (ctx: TransformerContext): void => {
     if (this.needPipelineFunctions) {
-      //  Firstly generates the two functions in their stack named RoleChecking
-      genRoleCheckFunc1(ctx)
-      genRoleCheckFunc2(ctx)
+      genGetUserData(ctx);
+      genGetUserOrganisationRole(ctx);
+      genGetOtherRoles(ctx);
+      genInstanceLookup(ctx);
+      genInstanceBatchGet(ctx);
+      genAllTableDataSource(ctx, true);
     }
-  }
+  };
 
 
   public stack = (stackName: string, stackResource: CloudFormation.Stack, stackTemplate: Template) => {
-    if (this.needPipelineFunctions) {
-      if (stackName === 'RoleChecking') {
-        //  Exports needed variables
-        [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
-          stackTemplate.Outputs[`${output}Output`] = {
-            Value: Fn.GetAtt(output, 'FunctionId')
-          };
-        });
-      } else {
-        //  Add parameters
-        [roleCheckFunc1Name, roleCheckFunc2Name].forEach(output => {
-          stackTemplate.Parameters[`${output}Param`] = { Type: 'String' };
-          stackResource.Properties.Parameters[`${output}Param`] = Fn.GetAtt(
-            'RoleChecking',
-            `Outputs.${output}Output`
-          );
-        });
-      }
+    const functions = [
+      getUserDataFunc,
+      getUserOrganisationRoleFunc, getOtherRolesFunc,
+      instanceLookupFunc, instanceBatchGetFunc
+    ];
+
+    if (stackName === 'RoleChecking') {
+      //  Exports needed variables
+      functions.forEach(output => {
+        stackTemplate.Outputs[`${output}Output`] = {
+          Value: Fn.GetAtt(output, 'FunctionId'),
+        };
+      });
+    } else {
+      //  Add parameters
+      functions.forEach(output => {
+        stackTemplate.Parameters[`${output}Param`] = { Type: 'String' };
+        stackResource.Properties.Parameters[`${output}Param`] = Fn.GetAtt(
+          'RoleChecking',
+          `Outputs.${output}Output`,
+        );
+      });
     }
-  }
+  };
 
   public object = (def: ObjectTypeDefinitionNode, directive: DirectiveNode, ctx: TransformerContext): void => {
     const modelDirective = def.directives.find(dir => dir.name.value === 'model');
@@ -104,35 +153,33 @@ export class ModelCustomAuthTransformer extends Transformer {
       ResolverResourceIDs[`DynamoDB${action}ResolverResourceID`](def.name.value),
       rules[action.toLowerCase()],
       def,
-      modelConfiguration,
     ));
 
+    // Protect the list query
     this.protectListQuery(
       ctx,
       ResolverResourceIDs.DynamoDBListResolverResourceID(def.name.value),
       rules.list,
       def,
-      modelConfiguration,
     );
 
-    // protect search query if @searchable is enabled
-    if (searchableDirective) {
-      throw new Error('@searchable with @CustomAuth Not implemented yet!')
-      // this.protectSearchQuery(ctx, def, ResolverResourceIDs.ElasticsearchSearchResolverResourceID(def.name.value), rules.list);
-    }
-
-    // protect sync query if model is sync enabled
+    // Protect sync query if model is sync enabled
     if (this.isSyncEnabled(ctx, def.name.value)) {
       this.protectSyncQuery(ctx, def, ResolverResourceIDs.SyncResolverResourceID(def.name.value), rules.list);
     }
 
-    // Check if subscriptions is enabled
+    // Protect search query if @searchable is enabled
+    if (searchableDirective) {
+      throw new Error('@searchable with @CustomAuth Not implemented yet!');
+      // this.protectSearchQuery(ctx, def, ResolverResourceIDs.ElasticsearchSearchResolverResourceID(def.name.value), rules.list);
+    }
+
+    // Protect if subscriptions if enabled
     if (modelConfiguration.getName('level') !== 'off') {
       this.protectSubscription('onCreate', ctx, rules.subscription, def, modelConfiguration);
       this.protectSubscription('onUpdate', ctx, rules.subscription, def, modelConfiguration);
       this.protectSubscription('onDelete', ctx, rules.subscription, def, modelConfiguration);
     }
-
   };
 
   private protectSingleItemAction(
@@ -140,106 +187,37 @@ export class ModelCustomAuthTransformer extends Transformer {
     resolverResourceId: string,
     rule: Rule,
     parent: ObjectTypeDefinitionNode | null,
-    modelConfiguration: ModelDirectiveConfiguration,
   ) {
     const resolver = ctx.getResource(resolverResourceId) as Resolver;
     if (rule && resolver) {
       //  Adding role check to the current request template
-      const roleCheck = this.genRoleCheckTemplate(rule, parent.name.value)
-      resolver.Properties.RequestMappingTemplate = roleCheck + resolver.Properties.RequestMappingTemplate
+      const roleCheck = genRoleCheckMappingTemplate(rule, parent.name.value);
+      resolver.Properties.RequestMappingTemplate = roleCheck + resolver.Properties.RequestMappingTemplate;
 
-      //  Converting into pipeline resolver
-      this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
-    }
-  }
-
-  private genRoleCheckTemplate(rule: Rule, modelName: string) {
-    if (rule.kind === 'INSTANCE_ROLE') {
-      return `
-############################################
-##          [Start] Role check            ##
-############################################
-#set($allowedRoles = ${JSON.stringify(rule.allowedRoles)})
-#set($role = null)
-
-##  Finding the role to check
-#if($ctx.stash.instanceUserRole)
-  #set($role = $ctx.stash.instanceUserRole.role)
-#elif($ctx.stash.instanceTeamRole)
-  #set($role = $ctx.stash.instanceTeamRole.role)
-#elif($ctx.stash.instanceOrganisationRole)
-  #set($role = $ctx.stash.instanceOrganisationRole.role)
-#end
-
-##  Checking the role
-#if(!$allowedRoles.contains($role))
-  $util.unauthorized()
-#end
-############################################
-##           [End] Role check             ##
-############################################
-`
-    } else if (rule.kind === 'ORGANISATION_ROLE') {
-      return `
-############################################
-##          [Start] Role check            ##
-############################################
-#set($allowedRoles = ${JSON.stringify(rule.allowedRoles)})
-#set($role = null)
-
-##  Finding the role to check
-#if($ctx.stash.organisationUserRole)
-  #set($role = $ctx.stash.organisationUserRole.${modelName.toLowerCase()}Role)
-#elif($ctx.stash.organisationTeamRole)
-  #set($role = $ctx.stash.organisationTeamRole.${modelName.toLowerCase()}Role)
-#end
-
-##  Checking the role
-#if(!$allowedRoles.contains($role))
-  $util.unauthorized()
-#end
-############################################
-##           [End] Role check             ##
-############################################
-`
-    } else {
-      return `
-############################################
-##          [Start] Role check            ##
-############################################
-
-##  Checking the role
-#if(!$ctx.stash.organisationUserRole ${rule.kind === 'ORGANISATION_ADMIN' ? `|| $ctx.stash.organisationUserRole.team != '_admin'` : ''})
-  $util.unauthorized()
-#end
-############################################
-##           [End] Role check             ##
-############################################
-`
+      //  Set the flag that we need pipeline functions at the end
+      this.needPipelineFunctions = true
+      convertWithRoleChecking(ctx, parent, resolverResourceId, resolver, rule.instanceField);
     }
   }
 
   private protectListQuery(
     ctx: TransformerContext,
     resolverResourceId: string,
-    rule: Rule,
+    rule: Maybe<ListRule>,
     parent: ObjectTypeDefinitionNode | null,
-    modelConfiguration: ModelDirectiveConfiguration,
-    explicitOperationName: string = undefined,
   ) {
     const resolver = ctx.getResource(resolverResourceId) as Resolver;
-    if (rule && resolver) {
-      const authExpression = this.authorizationExpressionForListResult(rule);
-      if (authExpression) {
-        // TODO: Implement
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
+    if (rule && rule.listConfig && resolver) {
+      if (rule.listConfig.kind === 'LIST_BY_INSTANCE_ROLE_LOOKUP') {
+        //  Set the flag that we need pipeline functions at the end
+        this.needPipelineFunctions = true
+        convertListToInstanceRoleLookup(ctx, resolverResourceId, resolver, rule, parent);
+      } else if (rule.listConfig.kind === 'LIST_BY_ORGANISATION_ID') {
+        //  Set the flag that we need pipeline functions at the end
+        this.needPipelineFunctions = true
+        convertListToOrganisationIDLookup(ctx, resolverResourceId, resolver, rule, parent)
       }
     }
-  }
-
-  private authorizationExpressionForListResult(rule: Rule, itemList: string = 'ctx.result.items'): Expression {
-    //  TODO: Implement resolver mapping template
-    return null
   }
 
   /*
@@ -274,15 +252,11 @@ export class ModelCustomAuthTransformer extends Transformer {
     ctx: TransformerContext,
     parent: ObjectTypeDefinitionNode,
     resolverResourceId: string,
-    rule: Rule
+    rule: Maybe<ListRule>,
   ) {
     const resolver = ctx.getResource(resolverResourceId) as Resolver;
-    if (rule && resolver) {
-      const authExpression = this.authorizationExpressionForListResult(rule);
-      if (authExpression) {
-        // TODO: Implement
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
-      }
+    if (rule && rule.listConfig && resolver) {
+
     }
   }
 
@@ -342,19 +316,19 @@ export class ModelCustomAuthTransformer extends Transformer {
 
     // add the rules in the subscription resolver
     if (rule) {
-      if (level === 'public') {
-        // set the resource with no auth logic
-        ctx.setResource(resolverResourceId, resolver);
-      } else {
-        // TODO: Implement subscription authorization resolver (should be transformed into pipeline resolver)
-        this.convertToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField)
-      }
-      // If the subscription level is set to public it adds the subscription resolver with no auth logic
-      if (!noneDS) {
-        ctx.setResource(ResourceConstants.RESOURCES.NoneDataSource, this.noneDataSource());
-      }
-      // finally map the resource to the stack
-      ctx.mapResourceToStack(parent.name.value, resolverResourceId);
+      // if (level === 'public') {
+      //   // set the resource with no auth logic
+      //   ctx.setResource(resolverResourceId, resolver);
+      // } else {
+      //   // TODO: Implement subscription authorization resolver (should be transformed into pipeline resolver)
+      //   this.convertSingleActionToPipelineResolver(ctx, parent, resolverResourceId, resolver, rule.instanceField);
+      // }
+      // // If the subscription level is set to public it adds the subscription resolver with no auth logic
+      // if (!noneDS) {
+      //   ctx.setResource(ResourceConstants.RESOURCES.NoneDataSource, this.noneDataSource());
+      // }
+      // // finally map the resource to the stack
+      // ctx.mapResourceToStack(parent.name.value, resolverResourceId);
     }
   }
 
@@ -367,13 +341,18 @@ export class ModelCustomAuthTransformer extends Transformer {
 
     // Get and validate the auth rules.
     const rules = getArg('rules', []) as AuthRuleDirective[];
-    const mappedRules : AuthRule = {} as AuthRule;
+    const mappedRules: AuthRule = {} as AuthRule;
 
     rules.forEach(rule => {
       rule.actions.forEach(action => {
         mappedRules[action.toLocaleLowerCase()] = { kind: rule.kind, allowedRoles: rule.allowedRoles, instanceField: rule.instanceField };
-      })
+      });
     });
+
+    const listConfig = getArg('listConfig') as ListConfig;
+    if (mappedRules.list && listConfig) {
+      mappedRules.list.listConfig = listConfig;
+    }
 
     return mappedRules;
   }
@@ -388,79 +367,6 @@ export class ModelCustomAuthTransformer extends Transformer {
     }
     return false;
   }
-
-  private convertToPipelineResolver(
-    ctx: TransformerContext,
-    parent: ObjectTypeDefinitionNode,
-    resourceId: string,
-    resolver: Resolver,
-    instanceID: string = 'id'
-  ) {
-    //  Set the flag that we need pipeline functions at the end
-    this.needPipelineFunctions = true
-
-    const before = `
-############################################
-##      [Start] Stashing needed stuff     ##
-############################################
-${instanceID ? `$util.qr($ctx.stash.put("instanceID", $ctx.args.input.${instanceID}))` : '## No instanceID set'}
-$util.qr($ctx.stash.put("userID", $ctx.identity.sub))
-$util.qr($ctx.stash.put("organisationID", $ctx.identity.claims["custom:currentOrganisation"]))
-############################################
-##       [End] Stashing needed stuff      ##
-############################################ 
-`
-    const after = `
-############################################
-##      [Start] Simple error check        ##
-############################################
-#if($ctx.error)
-  $util.error($ctx.error.message, $ctx.error.type, $ctx.result)
-#else
-  $util.toJson($ctx.result)
-#end
-############################################
-##       [End] Simple error check         ##
-############################################
-`
-    //  Define and assemble pipeline function
-    const pipelineFunctionID = `${resourceId}PipelineFunction`
-    const pipelineFunction = new AppSync.FunctionConfiguration({
-      ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
-      DataSourceName: resolver.Properties.DataSourceName,
-      RequestMappingTemplate: resolver.Properties.RequestMappingTemplate,
-      ResponseMappingTemplate: resolver.Properties.ResponseMappingTemplate,
-      Name: pipelineFunctionID,
-      FunctionVersion: RESOLVER_VERSION_ID
-    })
-
-    //  Map the new resource
-    ctx.setResource(pipelineFunctionID, pipelineFunction);
-    ctx.mapResourceToStack(parent.name.value, pipelineFunctionID);
-
-    //  Rewrite the resolver into pipeline resolver
-    resolver.Properties.RequestMappingTemplate = before
-    resolver.Properties.ResponseMappingTemplate = after
-    resolver.Properties.Kind = 'PIPELINE'
-    resolver.Properties.PipelineConfig = new PipelineConfig({
-      Functions: [
-        Fn.Ref(`${roleCheckFunc1Name}Param`),
-        Fn.Ref(`${roleCheckFunc2Name}Param`),
-        Fn.GetAtt(pipelineFunctionID, 'FunctionId')
-      ]
-    })
-
-    //  The resolver need to wait the creation of the pipeline function
-    if (typeof resolver.DependsOn === 'string') {
-      resolver.DependsOn = [resolver.DependsOn]
-    } else if (!Array.isArray(resolver.DependsOn)) {
-      resolver.DependsOn = []
-    }
-    resolver.DependsOn.push(pipelineFunctionID)
-
-    //  Save back the resolver
-    ctx.setResource(resourceId, resolver);
-  }
 }
 
-export default ModelCustomAuthTransformer
+export default ModelCustomAuthTransformer;
