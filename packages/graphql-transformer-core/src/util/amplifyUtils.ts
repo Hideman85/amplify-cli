@@ -137,7 +137,8 @@ async function ensureMissingStackMappings(config: ProjectOptions) {
     transformOutput = await _buildProject(config);
     const copyOfCloudBackend = await readFromPath(currentCloudBackendDirectory);
     const stackMapping = transformOutput.stackMapping;
-    if (copyOfCloudBackend && copyOfCloudBackend.build && copyOfCloudBackend.build.stacks) {
+    //  TODO: See why this is used and remove false if needed linked issue: https://github.com/aws-amplify/amplify-cli/issues/5323
+    if (false && copyOfCloudBackend && copyOfCloudBackend.build && copyOfCloudBackend.build.stacks) {
       // leave the custom stack alone. Don't split them into separate stacks
       const customStacks = Object.keys(copyOfCloudBackend.stacks || {});
       const stackNames = Object.keys(copyOfCloudBackend.build.stacks).filter(stack => !customStacks.includes(stack));
