@@ -5,7 +5,7 @@ import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 
 // TODO: Replace -tylqaqhldbbazmqji7cehkrqhm-dev by the way to get the GraphQL API ID and env from a mapping template
 
-export const pipelineFunctionName = 'FunctionInstanceBatchGet'
+export const pipelineFunctionName = 'FunctionInstanceBatchGet';
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
@@ -14,22 +14,27 @@ export const generateFunction = (ctx: TransformerContext) => {
 ############################################
 ##   [Start] DynamoDB Batch Get Request   ##
 ############################################
-#set($formattedKeys = [])
-#set($tableName = "\${ctx.stash.modelName}-tylqaqhldbbazmqji7cehkrqhm-dev")
-
-#foreach($key in $ctx.stash.instanceIDsToGet)
-  $util.qr($formattedKeys.add({ "id": { "S": $key } }))
-#end
-
-{
-  "version": "${RESOLVER_VERSION_ID}",
-  "operation": "BatchGetItem",
-  "tables": {
-    "$tableName": {
-      "keys": $util.toJson($formattedKeys)
+#if($ctx.stash.instanceIDsToGet.size() > 0)
+  #set($formattedKeys = [])
+  #set($tableName = "\${ctx.stash.modelName}-tylqaqhldbbazmqji7cehkrqhm-dev")
+  
+  #foreach($key in $ctx.stash.instanceIDsToGet)
+    $util.qr($formattedKeys.add({ "id": { "S": $key } }))
+  #end
+  
+  {
+    "version": "${RESOLVER_VERSION_ID}",
+    "operation": "BatchGetItem",
+    "tables": {
+      "$tableName": {
+        "keys": $util.toJson($formattedKeys)
+      }
     }
   }
-}
+#else
+  ##  DON'T REMOVE CAUSING EMPTY RESPONSE ERROR
+  {}
+#end
 ############################################
 ##    [End] DynamoDB Batch Get Request    ##
 ############################################
@@ -68,9 +73,9 @@ export const generateFunction = (ctx: TransformerContext) => {
 ############################################
 `,
     Name: pipelineFunctionName,
-    FunctionVersion: RESOLVER_VERSION_ID
-  })
+    FunctionVersion: RESOLVER_VERSION_ID,
+  });
 
   ctx.setResource(pipelineFunctionName, pipelineFunction);
   ctx.mapResourceToStack('RoleChecking', pipelineFunctionName);
-}
+};

@@ -3,7 +3,7 @@ import { AppSync, Fn } from 'cloudform-types';
 import { ResourceConstants } from 'graphql-transformer-common';
 import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 
-export const pipelineFunctionName = 'FunctionGetUserOrganisationRole'
+export const pipelineFunctionName = 'FunctionGetUserOrganisationRole';
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
@@ -40,11 +40,11 @@ export const generateFunction = (ctx: TransformerContext) => {
 {}
 `,
     Name: pipelineFunctionName,
-    FunctionVersion: RESOLVER_VERSION_ID
-  })
+    FunctionVersion: RESOLVER_VERSION_ID,
+  });
 
   ctx.setResource(pipelineFunctionName, pipelineFunction);
   ctx.mapResourceToStack('RoleChecking', pipelineFunctionName);
-}
+};
 
-export default generateFunction
+export default generateFunction;

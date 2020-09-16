@@ -1,7 +1,7 @@
 //  TS Types imports
 import Maybe from 'graphql/tsutils/Maybe';
 import { ArgumentNode, DirectiveNode, ObjectTypeDefinitionNode, valueFromASTUntyped } from 'graphql';
-import { AuthRule, AuthRuleDirective, ListConfig, ListRule, Rule } from './AuthRule';
+import { AuthRule, AuthRuleDirective, CreateRule, ListConfig, ListRule, Rule, SubModelConfig } from './AuthRule';
 import { ModelDirectiveConfiguration, ModelDirectiveOperationType, ModelSubscriptionLevel } from './ModelDirectiveConfiguration';
 
 //  Libs imports
@@ -13,6 +13,11 @@ import Resolver from 'cloudform-types/types/appSync/resolver';
 
 //  Pipeline functions imports
 import { generateFunction as genGetUserData, pipelineFunctionName as getUserDataFunc } from './PipelineFunctions/FunctionGetUserData';
+import { generateFunction as genParentsFunc, pipelineFunctionName as getParentsFunc } from './PipelineFunctions/FunctionBatchGetParents';
+import {
+  generateFunction as genCreateAdminRoleFunc,
+  pipelineFunctionName as createAdminRoleFunc,
+} from './PipelineFunctions/FunctionCreateInstanceAdminRole';
 import {
   generateFunction as genGetUserOrganisationRole,
   pipelineFunctionName as getUserOrganisationRoleFunc,
@@ -29,6 +34,8 @@ import {
   generateFunction as genInstanceBatchGet,
   pipelineFunctionName as instanceBatchGetFunc,
 } from './PipelineFunctions/FunctionInstanceBatchGet';
+import { resolveSubModelTransitivity, transformToTransitivePipeline } from './ResolverTransformers/MakeTransitiveResolver';
+
 
 //  All tables DataSource
 import genAllTableDataSource from './GenerateAllTablesDataSource';
@@ -41,15 +48,22 @@ import { converter as convertWithRoleChecking } from './ResolverTransformers/Sin
 //  Mapping template generator
 import genRoleCheckMappingTemplate from './GenRoleCheckMappingTemplate';
 
+export interface Model {
+  def: ObjectTypeDefinitionNode,
+  subModel: Maybe<SubModelConfig>,
+  rules: Maybe<AuthRule>
+}
 
 export class ModelCustomAuthTransformer extends Transformer {
   private needPipelineFunctions: boolean = false;
+  private processLater: { [key: string]: Model[] } = {};
+  private modelsProceed: { [key: string]: Model } = {};
 
   constructor() {
     super(
       'ModelCustomAuthTransformer',
       gql`
-        directive @CustomAuth(rules: [Rule_!]!, listConfig: ListConfig_) on OBJECT
+        directive @CustomAuth(rules: [Rule_!], listConfig: ListConfig_, subModel: SubModelConfig_, autoCreateAdminRole: Boolean) on OBJECT
         enum RoleKindEnum_ {
           ORGANISATION_ROLE
           ORGANISATION_MEMBER
@@ -90,11 +104,31 @@ export class ModelCustomAuthTransformer extends Transformer {
           listIndex: String
           organisationID: String
         }
+        enum SubModelKind_ {
+          FULLY_TRANSITIVE
+          CONDITIONALLY_TRANSITIVE
+        }
+        input SubModelConfig_ {
+          kind: SubModelKind_!
+          parentType: String!
+        }
       `,
     );
+    console.info('##########################################################');
+    console.info('##               \x1b[33m@CustomAuth\x1b[37m transformer');
+    console.info('##########################################################');
   }
 
   public after = (ctx: TransformerContext): void => {
+    const parents = Object.keys(this.processLater);
+    if (parents.length > 0) {
+      parents.forEach(parentType => {
+        const children = this.processLater[parentType].map(({ def }) => def.name.value);
+        console.error(`Type "${parentType}" not found can't proceed to children:`, children);
+      });
+      throw new InvalidDirectiveError('The directive @CustomAuth must be applied to the types above.');
+    }
+
     if (this.needPipelineFunctions) {
       genGetUserData(ctx);
       genGetUserOrganisationRole(ctx);
@@ -102,6 +136,8 @@ export class ModelCustomAuthTransformer extends Transformer {
       genInstanceLookup(ctx);
       genInstanceBatchGet(ctx);
       genAllTableDataSource(ctx, true);
+      genParentsFunc(ctx);
+      genCreateAdminRoleFunc(ctx);
     }
   };
 
@@ -110,7 +146,9 @@ export class ModelCustomAuthTransformer extends Transformer {
     const functions = [
       getUserDataFunc,
       getUserOrganisationRoleFunc, getOtherRolesFunc,
-      instanceLookupFunc, instanceBatchGetFunc
+      instanceLookupFunc, instanceBatchGetFunc,
+      getParentsFunc,
+      createAdminRoleFunc,
     ];
 
     if (stackName === 'RoleChecking') {
@@ -138,22 +176,144 @@ export class ModelCustomAuthTransformer extends Transformer {
       throw new InvalidDirectiveError('Types annotated with @CustomAuth must also be annotated with @model.');
     }
 
-    // check if searchable is enabled on the type
-    const searchableDirective = def.directives.find(dir => dir.name.value === 'searchable');
-
     // Get and validate the auth rules.
-    const rules = this.getAuthRulesFromDirective(directive);
+    const [rules, subModel] = this.getAuthRulesFromDirective(directive);
 
+    if (subModel) {
+      if (this.modelsProceed[subModel.parentType]) {
+        this.processSubModel(ctx, def, subModel, rules);
+      } else {
+        this.processLater[subModel.parentType] = [
+          ...(this.processLater[subModel.parentType] || []),
+          { def, subModel, rules },
+        ];
+      }
+    } else if (rules) {
+      //  Process the model
+      this.processObject(ctx, def, rules);
+      this.modelsProceed[def.name.value] = { def, rules, subModel };
+
+      //  Process eventual subModels (transitivity)
+      if (Array.isArray(this.processLater[def.name.value])) {
+        this.processLater[def.name.value].forEach(child => {
+          this.processSubModel(ctx, child.def, child.subModel, child.rules);
+        });
+        delete this.processLater[def.name.value];
+      }
+    }
+  };
+
+  private processSubModel(ctx: TransformerContext, def: ObjectTypeDefinitionNode, subModel: SubModelConfig, rules: Maybe<AuthRule>) {
+    console.info(`[SubModel]  ${subModel.kind.padEnd(25, ' ')} Child: ${def.name.value.padEnd(12, ' ')} Parent: ${subModel.parentType.padEnd(12, ' ')}`);
+    if (rules && Object.keys(rules).length > 0) {
+      if (subModel.kind === 'CONDITIONALLY_TRANSITIVE') {
+        //  TODO: Implement
+        console.warn(def.name.value, new Error('@CustomAuth with rules arg and CONDITIONALLY_TRANSITIVE subModel not implemented yet.'));
+        this.processObject(ctx, def, rules);
+
+        //  Save the model
+        this.modelsProceed[def.name.value] = { def, rules, subModel };
+      } else {
+        throw new InvalidDirectiveError('The directive @CustomAuth with rules arg cannot be applied to a FULLY_TRANSITIVE subModel config.');
+      }
+    } else {
+      const rootTypes = [];
+      let transitivity = resolveSubModelTransitivity(def, subModel, this.modelsProceed);
+      while (transitivity) {
+        rootTypes.push(transitivity.types[0]);
+        transitivity = transitivity.child;
+      }
+
+      ['Get', 'Create', 'Update', 'Delete'].forEach(action => {
+        const resourceId = ResolverResourceIDs[`DynamoDB${action}ResolverResourceID`](def.name.value);
+        const resolver = ctx.getResource(resourceId) as Resolver;
+        if (resolver) {
+          let roleCheck = '';
+          rootTypes.map((type, index) => {
+            const rootRules = this.modelsProceed[type].rules;
+            const rule = rootRules[action.toLowerCase()];
+            roleCheck += `
+##  Role check if the type is ${type}
+#${index === 0 ? '' : 'else'}if($ctx.args.input.id.startsWith("${type}-"))
+${genRoleCheckMappingTemplate(rule, type).split('\n').map(str => `  ${str}`).join('\n')}
+`;
+          });
+          resolver.Properties.RequestMappingTemplate = `
+${roleCheck}
+#else
+
+  #############################################
+  ##  Throw error because invalid root type  ##
+  #############################################
+  $util.error(
+    "Input '${def.name.value}' failed to satisfy the transitivity constraint, can't find the reel root type",
+    "TransitivityCheckError",
+    $ctx.args.input,
+    { "id": $id, "transitivity": $ctx.stash.transitivityModel }
+  )
+
+#end
+${resolver.Properties.RequestMappingTemplate}
+`;
+
+          //  For create add a special check
+          if (action === 'Create') {
+            resolver.Properties.RequestMappingTemplate = `
+############################################
+##    [Start] Check & Set the rootID      ##
+############################################
+##  SubModel kind = ${subModel.kind}
+#if(${subModel.kind === 'FULLY_TRANSITIVE' ? 'true' : '$ctx.args.input.rootID'})
+  #set($ctx.args.input.rootID = $ctx.args.input.id.split("[:]")[0])
+#end
+############################################
+##     [End] Check & Set the rootID       ##
+############################################
+${resolver.Properties.RequestMappingTemplate}
+`;
+          }
+
+          //  Set the flag that we need pipeline functions at the end
+          this.needPipelineFunctions = true;
+          transformToTransitivePipeline(ctx, def, resourceId, resolver, subModel, this.modelsProceed);
+        } else {
+          throw new InvalidDirectiveError(`The directive @CustomAuth got an issue and can't apply the transitivity check with on the type "${def.name.value} due to the non presence of "${action}" on a parent type "${'template'}".`);
+        }
+      });
+
+      //  Save the model
+      this.modelsProceed[def.name.value] = { def, rules, subModel };
+    }
+
+    //  Process eventual subModels (transitivity)
+    if (Array.isArray(this.processLater[def.name.value])) {
+      this.processLater[def.name.value].forEach(child => {
+        this.processSubModel(ctx, child.def, child.subModel, child.rules);
+      });
+      delete this.processLater[def.name.value];
+    }
+  }
+
+  private processObject(ctx: TransformerContext, def: ObjectTypeDefinitionNode, rules: AuthRule) {
+    const modelDirective = def.directives.find(dir => dir.name.value === 'model');
     // Retrieve the configuration options for the related @model directive
     const modelConfiguration = new ModelDirectiveConfiguration(modelDirective, def);
 
     // For each operation evaluate the rules and apply the changes to the relevant resolver.
-    ['Get', 'Create', 'Update', 'Delete'].forEach(action => this.protectSingleItemAction(
+    ['Get', 'Update', 'Delete'].forEach(action => this.protectSingleItemAction(
       ctx,
       ResolverResourceIDs[`DynamoDB${action}ResolverResourceID`](def.name.value),
       rules[action.toLowerCase()],
       def,
     ));
+
+    // Protect the create query
+    this.protectCreateAction(
+      ctx,
+      ResolverResourceIDs.DynamoDBCreateResolverResourceID(def.name.value),
+      rules.create,
+      def,
+    );
 
     // Protect the list query
     this.protectListQuery(
@@ -169,6 +329,7 @@ export class ModelCustomAuthTransformer extends Transformer {
     }
 
     // Protect search query if @searchable is enabled
+    const searchableDirective = def.directives.find(dir => dir.name.value === 'searchable');
     if (searchableDirective) {
       throw new Error('@searchable with @CustomAuth Not implemented yet!');
       // this.protectSearchQuery(ctx, def, ResolverResourceIDs.ElasticsearchSearchResolverResourceID(def.name.value), rules.list);
@@ -180,12 +341,12 @@ export class ModelCustomAuthTransformer extends Transformer {
       this.protectSubscription('onUpdate', ctx, rules.subscription, def, modelConfiguration);
       this.protectSubscription('onDelete', ctx, rules.subscription, def, modelConfiguration);
     }
-  };
+  }
 
   private protectSingleItemAction(
     ctx: TransformerContext,
     resolverResourceId: string,
-    rule: Rule,
+    rule: Maybe<Rule>,
     parent: ObjectTypeDefinitionNode | null,
   ) {
     const resolver = ctx.getResource(resolverResourceId) as Resolver;
@@ -195,8 +356,30 @@ export class ModelCustomAuthTransformer extends Transformer {
       resolver.Properties.RequestMappingTemplate = roleCheck + resolver.Properties.RequestMappingTemplate;
 
       //  Set the flag that we need pipeline functions at the end
-      this.needPipelineFunctions = true
+      this.needPipelineFunctions = true;
       convertWithRoleChecking(ctx, parent, resolverResourceId, resolver, rule.instanceField);
+    }
+  }
+
+  private protectCreateAction(
+    ctx: TransformerContext,
+    resolverResourceId: string,
+    rule: Maybe<CreateRule>,
+    parent: ObjectTypeDefinitionNode | null,
+  ) {
+    const resolver = ctx.getResource(resolverResourceId) as Resolver;
+    if (rule && resolver) {
+      //  Adding role check to the current request template
+      const roleCheck = genRoleCheckMappingTemplate(rule, parent.name.value);
+      resolver.Properties.RequestMappingTemplate = roleCheck + resolver.Properties.RequestMappingTemplate;
+
+      const extraFunctions = [
+        Fn.Ref(`${createAdminRoleFunc}Param`),
+      ];
+
+      //  Set the flag that we need pipeline functions at the end
+      this.needPipelineFunctions = true;
+      convertWithRoleChecking(ctx, parent, resolverResourceId, resolver, rule.instanceField, extraFunctions);
     }
   }
 
@@ -210,12 +393,12 @@ export class ModelCustomAuthTransformer extends Transformer {
     if (rule && rule.listConfig && resolver) {
       if (rule.listConfig.kind === 'LIST_BY_INSTANCE_ROLE_LOOKUP') {
         //  Set the flag that we need pipeline functions at the end
-        this.needPipelineFunctions = true
+        this.needPipelineFunctions = true;
         convertListToInstanceRoleLookup(ctx, resolverResourceId, resolver, rule, parent);
       } else if (rule.listConfig.kind === 'LIST_BY_ORGANISATION_ID') {
         //  Set the flag that we need pipeline functions at the end
-        this.needPipelineFunctions = true
-        convertListToOrganisationIDLookup(ctx, resolverResourceId, resolver, rule, parent)
+        this.needPipelineFunctions = true;
+        convertListToOrganisationIDLookup(ctx, resolverResourceId, resolver, rule, parent);
       }
     }
   }
@@ -332,7 +515,7 @@ export class ModelCustomAuthTransformer extends Transformer {
     }
   }
 
-  private getAuthRulesFromDirective(directive: DirectiveNode): AuthRule {
+  private getAuthRulesFromDirective(directive: DirectiveNode): [Maybe<AuthRule>, Maybe<SubModelConfig>] {
     const get = (s: string) => (arg: ArgumentNode) => arg.name.value === s;
     const getArg = (arg: string, dflt?: any) => {
       const argument = directive.arguments.find(get(arg));
@@ -354,7 +537,13 @@ export class ModelCustomAuthTransformer extends Transformer {
       mappedRules.list.listConfig = listConfig;
     }
 
-    return mappedRules;
+    const autoCreateAdminRole = getArg('autoCreateAdminRole', undefined) as boolean;
+    if (mappedRules.create && autoCreateAdminRole !== undefined) {
+      mappedRules.create.autoCreateAdminRole = autoCreateAdminRole;
+    }
+
+    const subModel = getArg('subModel') as SubModelConfig;
+    return [mappedRules, subModel];
   }
 
   private isSyncEnabled(ctx: TransformerContext, typeName: string): boolean {

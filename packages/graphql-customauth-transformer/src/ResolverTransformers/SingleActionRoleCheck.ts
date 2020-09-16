@@ -1,4 +1,4 @@
-import { AppSync, Fn } from 'cloudform-types';
+import { AppSync, Fn, IntrinsicFunction } from 'cloudform-types';
 import { ResourceConstants } from 'graphql-transformer-common';
 import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 import Resolver, { PipelineConfig } from 'cloudform-types/types/appSync/resolver';
@@ -14,12 +14,14 @@ export const converter = (
   resourceId: string,
   resolver: Resolver,
   instanceID: string = 'id',
+  extraFunctions: IntrinsicFunction[] = [],
 ) => {
   const before = `
 ############################################
 ##      [Start] Stashing needed stuff     ##
 ############################################
 #set($ctx.stash = {}) ##  Prefer to empty the stash first looks like it is kept from one call to one other
+$util.qr($ctx.stash.put("typeName", "${parent.name.value}"))
 ${instanceID ? `$util.qr($ctx.stash.put("instanceID", $ctx.args.input.${instanceID}))` : '## No instanceID set'}
 $util.qr($ctx.stash.put("userID", $ctx.identity.sub))
 ############################################
@@ -66,6 +68,7 @@ $util.qr($ctx.stash.put("userID", $ctx.identity.sub))
       Fn.Ref(`${getUserOrganisationRoleFunc}Param`),
       Fn.Ref(`${getOtherRolesFunc}Param`),
       Fn.GetAtt(pipelineFunctionID, 'FunctionId'),
+      ...extraFunctions,
     ],
   });
 
@@ -83,4 +86,4 @@ $util.qr($ctx.stash.put("userID", $ctx.identity.sub))
 
   //  Save back the resolver
   ctx.setResource(resourceId, resolver);
-}
+};

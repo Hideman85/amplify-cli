@@ -1,7 +1,7 @@
-import Maybe from 'graphql/tsutils/Maybe'
+import Maybe from 'graphql/tsutils/Maybe';
 
 export type RoleKindEnum = 'ORGANISATION_ROLE' | 'ORGANISATION_MEMBER' | 'ORGANISATION_ADMIN' | 'INSTANCE_ROLE'
-export type Role = 'VIEWING_ACCESS'  | 'ADMIN_ACCESS' // For both
+export type Role = 'VIEWING_ACCESS' | 'ADMIN_ACCESS' // For both
   | 'COMMENTING_ACCESS' | 'EDITING_ACCESS' // For Instance only
   | 'CREATING_ACCESS' // For Organisation only
 export type ActionEnum = 'GET' | 'LIST' | 'CREATE' | 'UPDATE' | 'DELETE' | 'SUBSCRIPTION'
@@ -10,8 +10,8 @@ export type ListConfigEnum = 'LIST_BY_INSTANCE_ROLE_LOOKUP' | 'LIST_BY_ORGANISAT
 export interface ListConfig {
   kind: ListConfigEnum;
   // Attributes for kind = LIST_BY_ORGANISATION_ID
-  listIndex: String;
-  organisationID: String;
+  listIndex: string;
+  organisationID: string;
 }
 
 export interface AuthRuleDirective {
@@ -27,6 +27,10 @@ export interface Rule {
   instanceField: Maybe<string>;
 }
 
+export interface CreateRule extends Rule {
+  autoCreateAdminRole: Maybe<boolean>;
+}
+
 export interface ListRule extends Rule {
   listConfig: Maybe<ListConfig>;
 }
@@ -34,8 +38,18 @@ export interface ListRule extends Rule {
 export interface AuthRule {
   get: Maybe<Rule>;
   list: Maybe<ListRule>;
-  create: Maybe<Rule>;
+  create: Maybe<CreateRule>;
   update: Maybe<Rule>;
   delete: Maybe<Rule>;
   subscription: Maybe<Rule>;
+}
+
+export type SubModelKind = 'FULLY_TRANSITIVE' | 'CONDITIONALLY_TRANSITIVE';
+
+export interface SubModelConfig {
+  kind: SubModelKind;
+  parentType: string;
+  field: string;
+  index: string;
+  organisationField: string;
 }

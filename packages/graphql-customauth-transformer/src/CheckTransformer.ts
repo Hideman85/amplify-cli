@@ -1,11 +1,11 @@
-import { gql, Transformer, TransformerContext, InvalidDirectiveError } from 'graphql-transformer-core';
+import { gql, InvalidDirectiveError, Transformer, TransformerContext } from 'graphql-transformer-core';
 import {
   ArgumentNode,
   DirectiveNode,
   FieldDefinitionNode,
   InterfaceTypeDefinitionNode,
-  ObjectTypeDefinitionNode,
   ListValueNode,
+  ObjectTypeDefinitionNode,
   StringValueNode,
 } from 'graphql';
 import { ResolverResourceIDs } from 'graphql-transformer-common';
@@ -22,6 +22,9 @@ export class CheckTransformer extends Transformer {
       'CheckTransformer',
       gql`directive @Check(values: [String!]!) on FIELD_DEFINITION`,
     );
+    console.info('##########################################################');
+    console.info('##                  \x1b[33m@Check\x1b[37m transformer');
+    console.info('##########################################################');
   }
 
   private transformValue(value: string) {

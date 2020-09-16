@@ -1,33 +1,36 @@
-import {gql, Transformer, TransformerContext, InvalidDirectiveError} from 'graphql-transformer-core'
+import { gql, InvalidDirectiveError, Transformer, TransformerContext } from 'graphql-transformer-core';
 import {
   ArgumentNode,
+  BooleanValueNode,
   DirectiveNode,
   FieldDefinitionNode,
   InterfaceTypeDefinitionNode,
   ObjectTypeDefinitionNode,
-  BooleanValueNode
-} from 'graphql'
-import {ResolverResourceIDs} from 'graphql-transformer-common'
-import Resolver from 'cloudform-types/types/appSync/resolver'
+} from 'graphql';
+import { ResolverResourceIDs } from 'graphql-transformer-common';
+import Resolver from 'cloudform-types/types/appSync/resolver';
 
 const valueMapping = {
   null: '{ "attributeExists": false }',
-  notnull: '{ "attributeExists": true }'
-}
+  notnull: '{ "attributeExists": true }',
+};
 
 export class ReadOnlyTransformer extends Transformer {
   constructor() {
     super(
       'ReadOnlyTransformer',
-      gql`directive @ReadOnly(allowSetWhenEmpty: Boolean) on FIELD_DEFINITION`
+      gql`directive @ReadOnly(allowSetWhenEmpty: Boolean) on FIELD_DEFINITION`,
     );
+    console.info('##########################################################');
+    console.info('##                \x1b[33m@ReadOnly\x1b[37m transformer');
+    console.info('##########################################################');
   }
 
   private transformValue(value: string) {
     if (valueMapping[value]) {
-      return valueMapping[value]
+      return valueMapping[value];
     } else {
-      return `{ "eq": ${value} }`
+      return `{ "eq": ${value} }`;
     }
   }
 
@@ -35,17 +38,17 @@ export class ReadOnlyTransformer extends Transformer {
     obj: ObjectTypeDefinitionNode | InterfaceTypeDefinitionNode,
     def: FieldDefinitionNode,
     dir: DirectiveNode,
-    ctx: TransformerContext
+    ctx: TransformerContext,
   ) => {
     const modelDirective = obj.directives.find(dir => dir.name.value === 'model');
     if (!modelDirective) {
       throw new InvalidDirectiveError('Types annotated with @CustomAuth must also be annotated with @model.');
     }
 
-    const resourceID = ResolverResourceIDs.DynamoDBUpdateResolverResourceID(obj.name.value)
+    const resourceID = ResolverResourceIDs.DynamoDBUpdateResolverResourceID(obj.name.value);
     const resolver = ctx.getResource(resourceID) as Resolver;
-    const arg = dir.arguments.find((arg: ArgumentNode) => arg.name.value === 'allowSetWhenEmpty')
-    const allowSetWhenEmpty = (arg && arg.value) as BooleanValueNode
+    const arg = dir.arguments.find((arg: ArgumentNode) => arg.name.value === 'allowSetWhenEmpty');
+    const allowSetWhenEmpty = (arg && arg.value) as BooleanValueNode;
 
     if (resolver) {
       resolver.Properties.RequestMappingTemplate = `
@@ -72,11 +75,11 @@ ${(allowSetWhenEmpty && allowSetWhenEmpty.value) ? `
 ############################################
 ##   [End] Build DB ReadOnly condition    ##
 ############################################
-${resolver.Properties.RequestMappingTemplate}`
+${resolver.Properties.RequestMappingTemplate}`;
 
-      ctx.setResource(resourceID, resolver)
+      ctx.setResource(resourceID, resolver);
     }
-  }
+  };
 }
 
-export default ReadOnlyTransformer
+export default ReadOnlyTransformer;

@@ -1,5 +1,5 @@
 import { getDirectiveArguments } from 'graphql-transformer-core';
-import { graphqlName, toUpper, plurality } from 'graphql-transformer-common';
+import { graphqlName, plurality, toUpper } from 'graphql-transformer-common';
 import { DirectiveNode, ObjectTypeDefinitionNode } from 'graphql';
 
 export interface QueryNameMap {

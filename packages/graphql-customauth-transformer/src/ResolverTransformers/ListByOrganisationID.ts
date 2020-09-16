@@ -1,5 +1,5 @@
 import Resolver, { PipelineConfig } from 'cloudform-types/types/appSync/resolver';
-import { ListRule, Rule } from '../AuthRule';
+import { ListRule } from '../AuthRule';
 import { TransformerContext } from 'graphql-transformer-core';
 import { Fn } from 'cloudform-types';
 import { pipelineFunctionName as getUserDataFunc } from '../PipelineFunctions/FunctionGetUserData';
@@ -17,7 +17,7 @@ export const converter = (
   rule: Maybe<ListRule>,
   parent: ObjectTypeDefinitionNode | null,
 ) => {
-  const pipelineFunctionID = `${parent.name.value}ListPipelineFunction`;
+  const pipelineFunctionID = `List${parent.name.value}PipelineFunction`;
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
     DataSourceName: resolver.Properties.DataSourceName,
@@ -35,7 +35,7 @@ export const converter = (
       "#pk": "${rule.listConfig.organisationID}"
     },
     "expressionValues": $util.dynamodb.toMapValuesJson({
-      ":organisationID": $ctx.stash.organisationID
+      ":pk": $ctx.stash.organisationID
     })
   },
   "filter": $util.toJson($filter)

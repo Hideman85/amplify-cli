@@ -2,7 +2,7 @@ import { TransformerContext } from 'graphql-transformer-core';
 import { AppSync, Fn, IAM, IntrinsicFunction, Refs } from 'cloudform-types';
 import { ResourceConstants, SyncResourceIDs } from 'graphql-transformer-common';
 import md5 from 'md5';
-import { Kind, ObjectTypeDefinitionNode } from 'graphql';
+import { Kind } from 'graphql';
 
 const dynamoDBTableName = (typeName: string): IntrinsicFunction => {
   return Fn.If(
@@ -72,6 +72,9 @@ const makeBatchIAMRole = (types: string[], syncConfig: boolean) => {
                 'dynamodb:GetItem',
                 'dynamodb:Scan',
                 'dynamodb:Query',
+                'dynamodb:PutItem',
+                'dynamodb:DeleteItem',
+                'dynamodb:UpdateItem',
               ],
               Resource: [
                 ...tables,

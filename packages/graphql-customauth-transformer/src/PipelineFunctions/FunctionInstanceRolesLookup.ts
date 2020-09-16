@@ -5,7 +5,7 @@ import { RESOLVER_VERSION_ID } from 'graphql-mapping-template';
 
 // const $roles = ['VIEWING_ACCESS', 'COMMENTING_ACCESS', 'EDITING_ACCESS', 'ADMIN_ACCESS']
 
-export const pipelineFunctionName = 'FunctionInstanceRolesLookup'
+export const pipelineFunctionName = 'FunctionInstanceRolesLookup';
 export const generateFunction = (ctx: TransformerContext) => {
   const pipelineFunction = new AppSync.FunctionConfiguration({
     ApiId: Fn.GetAtt(ResourceConstants.RESOURCES.GraphQLAPILogicalID, 'ApiId'),
@@ -142,9 +142,9 @@ $util.qr($ctx.stash.put("instanceLookupOrgID", "__EVERYONE__"))
 {}
 `,
     Name: pipelineFunctionName,
-    FunctionVersion: RESOLVER_VERSION_ID
-  })
+    FunctionVersion: RESOLVER_VERSION_ID,
+  });
 
   ctx.setResource(pipelineFunctionName, pipelineFunction);
   ctx.mapResourceToStack('RoleChecking', pipelineFunctionName);
-}
+};

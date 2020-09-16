@@ -1,5 +1,5 @@
 import Resolver, { PipelineConfig } from 'cloudform-types/types/appSync/resolver';
-import { ListRule, Rule } from '../AuthRule';
+import { ListRule } from '../AuthRule';
 import { TransformerContext } from 'graphql-transformer-core';
 import { Fn } from 'cloudform-types';
 import { pipelineFunctionName as getUserDataFunc } from '../PipelineFunctions/FunctionGetUserData';
